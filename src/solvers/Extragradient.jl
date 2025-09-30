@@ -4,6 +4,19 @@ using LinearAlgebra
 using Random
 using Test
 
+function dualv(μ⁺, μ⁻, _W, W, W∞, ηp, r, c)
+    pμ = softmax(-(W * 0.5 .+ μ⁺' .- μ⁻') ./ ηp, norm_dims=2)
+    return 0.5 * dot(_W, r .* pμ) + W∞ * dot((sum(r .* pμ, dims=1)' - c), μ⁺ - μ⁻) + ηp * dot(r, neg_entropy(pμ, dims=2))
+end
+function primalv(μ⁺p::TA, μ⁻p::TA, st::R, _W::TM, W::TM, W∞::R, ηp::R, r::TA, c::TA) where {TA,TM,R}
+    pμ = softmax(-(W * st * 0.5 .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
+    return 0.5 * dot(_W, r .* pμ) + W∞ * norm((sum(r .* pμ, dims=1)' - c), 1) + ηp * dot(r, neg_entropy(pμ, dims=2))
+end
+
+function primalv(p::TM, _W::TM, W∞::R, ηp::R, r::TA, c::TA) where {TA,TM,R}
+    return 0.5 * dot(_W, r .* p) + W∞ * norm((sum(r .* p, dims=1)' - c), 1) + ηp * dot(r, neg_entropy(p, dims=2))
+end
+
 
 function extragradient_ot(r::AbstractArray{R},
     c::AbstractArray{R},
@@ -15,10 +28,10 @@ function extragradient_ot(r::AbstractArray{R},
 ) where {R}
     # input 
     W∞ = norm(_W, Inf)
-    ηp = args.ηp / 2W∞
-    ημ_scale = args.ημ
+    ηp = args.eta_p / 2W∞
+    eta_mu_scale = args.eta_mu
     W = _W ./ W∞
-    ε = args.ε / W∞
+    epsilon = args.epsilon / W∞
     n = size(r, 1)
     if isa(W, CuArray)
         μ⁺ = 0.5 * CUDA.ones(R, (n, 1))
@@ -31,9 +44,9 @@ function extragradient_ot(r::AbstractArray{R},
     μ⁺a = copy(μ⁺)
     μ⁻t = copy(μ⁺)
     μ⁺t = copy(μ⁺)
-    # ημ = args.C₂ * sqrt(args.B) ./ (c .+ args.C₃)
-    ημ = args.C₂ * sqrt(args.B) ./ (c .+ args.C₃ / n)
-    ηπ = args.C₂ / sqrt(args.B) ./ r
+    # eta_mu = args.C2 * sqrt(args.B) ./ (c .+ args.C3)
+    eta_mu = args.C2 * sqrt(args.B) ./ (c .+ args.C3 / n)
+    ηπ = args.C2 / sqrt(args.B) ./ r
     if p0 == Nothing
         p = softmax(-r .* (W * 0.5 .+ (μ⁺' .- μ⁻')) ./ ηπ; norm_dims=2)
     else
@@ -44,26 +57,34 @@ function extragradient_ot(r::AbstractArray{R},
         end
     end
 
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    time_current = time_ns()
     for i in 1:args.tmax
         if args.verbose && (i - 1) % frequency == 0
             pr = r .* p
             feas = norm(sum(pr, dims=1)' - c, 1)
             obj = W∞ * dot(round(pr, r, c), W)
-            @printf "%d,%.14e,%.14e,-1,dual_extrap\n" i feas obj
+            pobj = primalv(p, W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺a, μ⁻a, _W, W, W∞, ηp, r, c)
+
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragrad_primal\n" (time_ns() - time_current) / 1e9 i feas obj pobj dobj
+            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
+                break
+            end
         end
-        arg = ημ .* (sum(r .* p, dims=1)' - c)
+        arg = eta_mu .* (sum(r .* p, dims=1)' - c)
         maxval = max.(arg, -arg)
-        μ⁻t = μ⁻a .^ (1 - args.ημ) .* exp.(-arg - maxval)
-        μ⁺t = μ⁺a .^ (1 - args.ημ) .* exp.(arg - maxval)
+        μ⁻t = μ⁻a .^ (1 - args.eta_mu) .* exp.(-arg - maxval)
+        μ⁺t = μ⁺a .^ (1 - args.eta_mu) .* exp.(arg - maxval)
         normv = (μ⁻t + μ⁺t)
         μ⁻t = μ⁻t ./ normv
         μ⁺t = μ⁺t ./ normv
         pt = p .^ (1 - ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 .+ (μ⁺a .- μ⁻a)'))
         pt ./= sum(pt, dims=2)
-        arg = ημ .* (sum(r .* pt, dims=1)' - c)
+        arg = eta_mu .* (sum(r .* pt, dims=1)' - c)
         maxval = max.(arg, -arg)
-        μ⁻ = μ⁻a .^ (1 - args.ημ) .* exp.(-arg - maxval)
-        μ⁺ = μ⁺a .^ (1 - args.ημ) .* exp.(arg - maxval)
+        μ⁻ = μ⁻a .^ (1 - args.eta_mu) .* exp.(-arg - maxval)
+        μ⁺ = μ⁺a .^ (1 - args.eta_mu) .* exp.(arg - maxval)
 
         normv = (μ⁻ + μ⁺)
         μ⁻ ./= normv
@@ -113,17 +134,17 @@ function update_μ(μ⁺::CuDeviceArray{R}, μ⁻::CuDeviceArray{R}, μ⁺_1::Cu
 end
 
 
-function update_μ_residual(μ⁺::CuDeviceArray{R}, μ⁻::CuDeviceArray{R}, μ⁺a::CuDeviceArray{R}, μ⁻a::CuDeviceArray{R}, residual::CuDeviceArray{R}, c::CuDeviceArray{R}, ημᵢ::CuDeviceArray{R}, ημ::R, B::R, adjust::Bool) where R
+function update_μ_residual(μ⁺::CuDeviceArray{R}, μ⁻::CuDeviceArray{R}, μ⁺a::CuDeviceArray{R}, μ⁻a::CuDeviceArray{R}, residual::CuDeviceArray{R}, c::CuDeviceArray{R}, eta_muᵢ::CuDeviceArray{R}, eta_mu::R, B::R, adjust::Bool) where R
     N = size(μ⁺, 1)
     tid = threadIdx().x + blockDim().x * (blockIdx().x - 1)
     if tid > N
         return
     end
-    ημᵢ_tid = ημᵢ[tid]
+    eta_muᵢ_tid = eta_muᵢ[tid]
     difference = residual[tid] - c[tid]
-    maxval = ημᵢ_tid * max(-difference, difference)
-    new_μ⁺ = μ⁺a[tid]^(1 - ημ) * exp(ημᵢ_tid * (difference) - maxval)
-    new_μ⁻ = μ⁻a[tid]^(1 - ημ) * exp(-ημᵢ_tid * (difference) - maxval)
+    maxval = eta_muᵢ_tid * max(-difference, difference)
+    new_μ⁺ = μ⁺a[tid]^(1 - eta_mu) * exp(eta_muᵢ_tid * (difference) - maxval)
+    new_μ⁻ = μ⁻a[tid]^(1 - eta_mu) * exp(-eta_muᵢ_tid * (difference) - maxval)
     normv = new_μ⁺ + new_μ⁻
     new_μ⁺ /= normv
     new_μ⁻ /= normv
@@ -355,7 +376,7 @@ function extragradient_ot_dual(r::CuArray{R},
     s0=0.0
 ) where {R}
     W∞ = norm(_W, Inf)
-    ηp = args.ηp / 2 / W∞
+    ηp = args.eta_p / 2 / W∞
     W = _W ./ W∞
     n = size(r, 1)
     if _μ⁺ == Nothing
@@ -375,7 +396,7 @@ function extragradient_ot_dual(r::CuArray{R},
     μ⁺a = copy(μ⁺)
     μ⁻t = copy(μ⁻)
     μ⁺t = copy(μ⁺)
-    ημ = args.C₂ * sqrt(args.B) ./ (c .+ args.C₃ / n)
+    eta_mu = args.C2 * sqrt(args.B) ./ (c .+ args.C3 / n)
     μ⁺p = copy(μ⁺)
     μ⁻p = copy(μ⁻)
     μ⁺pa = copy(μ⁺)
@@ -390,10 +411,12 @@ function extragradient_ot_dual(r::CuArray{R},
     # maxj = reshape(maximum(W, dims=2), n)
     # maximum!(maxvals, -(W * 0.5) ./ ηp)
     threads = 256
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
     linear_blocks = Int(ceil(n / threads))
     warp_blocks = Int(ceil(n / div(threads, 32, RoundUp)))
     # Precompute a transposed copy for coalesced reads in the fused LSE kernel
     Wt = permutedims(W, (2, 1))
+    time_current = time_ns()
     @inline function infeas(μ⁺, μ⁻)
         @cuda threads = threads blocks = warp_blocks warp_logsumexp_t_fused!(sumvals, Wt, μ⁺, μ⁻, ηp, st)
         @cuda threads = threads blocks = warp_blocks residual_c!(residual_storage, c, r, W, μ⁺, μ⁻, sumvals, ηp, st)
@@ -401,20 +424,25 @@ function extragradient_ot_dual(r::CuArray{R},
     # ηp = 0.1
     for i in 1:args.tmax
         infeas(μ⁺p, μ⁻p)
-        @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺t, μ⁻t, μ⁺a, μ⁻a, residual_storage, c, ημ, args.ημ, args.B, false)
+        @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺t, μ⁻t, μ⁺a, μ⁻a, residual_storage, c, eta_mu, args.eta_mu, args.B, false)
         @cuda threads = threads blocks = linear_blocks update_μ(μ⁺pa, μ⁻pa, μ⁺p, μ⁻p, μ⁺a, μ⁻a, ηp)
         if (i - 1) % frequency == 0
             obj = dot(W, r .* softmax(-(W * 0.5 * st .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2))
             # pr = r .* p
             # feas = norm(sum(pr, dims=1)' - c, 1)
             feas = norm(c - residual_storage, 1)
-            # obj = dot(round(pr, r, c), _W)
-            @printf "%d,%.14e,%.14e,-1,%.14e,dual_extrap\n" i feas obj st
+            pobj = primalv(μ⁺p, μ⁻p, st, _W, W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺a, μ⁻a, _W, W, W∞, ηp, r, c)
+
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragrad_dual_cuda\n" (time_ns() - time_current) / 1e9 i feas obj pobj dobj
+            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
+                break
+            end
         end
         # st = (1 - ηp^(2 / 3)) * st + ηp^(2 / 3)
         st = (1 - ηp) * st + ηp
         infeas(μ⁺pa, μ⁻pa)
-        @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺, μ⁻, μ⁺a, μ⁻a, residual_storage, c, ημ, args.ημ, args.B, true)
+        @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺, μ⁻, μ⁺a, μ⁻a, residual_storage, c, eta_mu, args.eta_mu, args.B, true)
         @cuda threads = threads blocks = linear_blocks update_μ(μ⁺p, μ⁻p, μ⁺p, μ⁻p, μ⁺t, μ⁻t, ηp)
         # ηp *= 0.99
     end
@@ -430,7 +458,7 @@ function extragradient_ot_dual(r::AbstractArray{R},
     s0::Float64=0.0
 ) where {R}
     W∞ = norm(_W, Inf)
-    ηp = args.ηp / 2 / W∞
+    ηp = args.eta_p / 2 / W∞
     W = _W ./ W∞
     n = size(r, 1)
 
@@ -446,22 +474,15 @@ function extragradient_ot_dual(r::AbstractArray{R},
     μ⁺a = copy(μ⁺)
     μ⁻t = copy(μ⁻)
     μ⁺t = copy(μ⁺)
-    ημ = args.C₂ ./ (c .+ args.C₃ / n)
+    eta_mu = args.C2 ./ (c .+ args.C3 / n)
     μ⁺p = copy(μ⁺)
     μ⁻p = copy(μ⁻)
     μ⁺pa = copy(μ⁺)
     μ⁻pa = copy(μ⁻)
     μ⁻a = copy(μ⁻)
     st = s0
-    #  st = 0.0
-
-    # function infeas(μ⁺, μ⁻)
-    #     p = softmax(-(W * 0.5 * st .+ μ⁺' .- μ⁻') ./ ηp, norm_dims=2)
-    #     return sum(r .* p, dims=1)' - c
-    # end
-    # maxj = reshape(maximum(W, dims=2), n)
-    # maximum!(maxvals, -(W) ./ ηp)
-    maxvals .= 1 / ηp
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    time_current = time_ns()
     function infeas(μ⁺, μ⁻)
 
         maximum!(maxvals, -(W * 0.5 * st .+ μ⁺' .- μ⁻') ./ ηp)
@@ -476,12 +497,17 @@ function extragradient_ot_dual(r::AbstractArray{R},
             pr = r .* p
             feas = norm(sum(pr, dims=1)' - c, 1)
             obj = dot(round(pr, r, c), _W)
-            @printf "%d,%.14e,%.14e,-1,dual_extrap\n" i feas obj
+            pobj = primalv(p, _W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺a, μ⁻a, _W, W, W∞, ηp, r, c)
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,dual_extrap\n" (time_ns() - time_current) / 1e9 i feas obj pobj dobj
+            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
+                break
+            end
         end
 
         infeas(μ⁺p, μ⁻p)
-        μ⁻t = μ⁻a .^ (1 - args.ημ) .* exp.(-ημ .* (residual_storage - c))
-        μ⁺t = μ⁺a .^ (1 - args.ημ) .* exp.(ημ .* (residual_storage - c))
+        μ⁻t = μ⁻a .^ (1 - args.eta_mu) .* exp.(-eta_mu .* (residual_storage - c))
+        μ⁺t = μ⁺a .^ (1 - args.eta_mu) .* exp.(eta_mu .* (residual_storage - c))
 
         normv = (μ⁻t + μ⁺t)
         μ⁻t = μ⁻t ./ normv
@@ -496,8 +522,8 @@ function extragradient_ot_dual(r::AbstractArray{R},
         st = (1 - ηp) * st + ηp
 
         infeas(μ⁺pa, μ⁻pa)
-        μ⁻ = μ⁻a .^ (1 - args.ημ) .* exp.(-ημ .* (residual_storage - c))#(sum(r .* pt, dims=1)' - c))
-        μ⁺ = μ⁺a .^ (1 - args.ημ) .* exp.(ημ .* (residual_storage - c))
+        μ⁻ = μ⁻a .^ (1 - args.eta_mu) .* exp.(-eta_mu .* (residual_storage - c))#(sum(r .* pt, dims=1)' - c))
+        μ⁺ = μ⁺a .^ (1 - args.eta_mu) .* exp.(eta_mu .* (residual_storage - c))
         normv = (μ⁻ + μ⁺)
         μ⁻ ./= normv
         μ⁺ ./= normv

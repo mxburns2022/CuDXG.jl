@@ -13,7 +13,7 @@ function sinkhorn_log(r::AbstractArray{R},
     # input 
     # WScaled = W
     n = size(r, 1)
-    K = -W ./ args.ηp
+    K = -W ./ args.eta_p
     if isa(W, CuArray)
         φ = CUDA.zeros(R, n)
         cache1 = CUDA.zeros(R, n)
@@ -25,6 +25,8 @@ function sinkhorn_log(r::AbstractArray{R},
         cache2 = zeros(R, n)
         maxcache = zeros(R, n)
     end
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    time_start = time_ns()
     for i in 1:args.tmax
         # logsumexp!(cache1', maxcache', K .+ φ, 1)
         # logsumexp!(cache2, maxcache, K .+ (log.(c) - cache1)', 2)
@@ -38,14 +40,20 @@ function sinkhorn_log(r::AbstractArray{R},
             feas = norm(sum(p, dims=1)' .- c, 1) + norm(sum(p, dims=2) .- r, 1)
         end
         if args.verbose && (i - 1) % frequency == 0
-            ψ = reshape(log.(c) - logsumexp(K .+ φ, 1)', (n,))
+            ψ = reshape(log.(c) - logsumexp(K .+ φ, 1)', n)
             p = exp.(K .+ φ .+ ψ')
-            pr = round(p, r, c)
+            # pr = round(p, r, c)
             feas = norm(sum(p, dims=1)' .- c, 1) + norm(sum(p, dims=2) .- r, 1)
             # println(ψ'c, " ", φ'r)
-            pobj = dot(pr, W)
+            obj = dot(p, W)
+            pobj = obj + args.eta_p * sum(neg_entropy(p))
+            # println()
+            dobj = args.eta_p * (-c'ψ - sum(r'φ))
             # pdgap = -pobj + dobj
-            @printf "%d,%.14e,%.14e,-1,sinkhorn\n" i feas pobj
+            @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,sinkhorn\n" (time_ns() - time_start) / 1e9 i feas obj pobj dobj
+            if pobj + dobj < args.epsilon / 6 && feas < args.epsilon / 6
+                break
+            end
         end
 
     end

@@ -13,13 +13,13 @@ using StructTypes
     N = size(r, 1)
 end
 @kwdef mutable struct EOTArgs{R}
-    ηp::R = 0.0
-    ημ::R = 0.0
-    C₁::R = 1.0
-    C₂::R = 1.0
-    C₃::R = 1e-3
+    eta_p::R = 0.0
+    eta_mu::R = 0.0
+    C1::R = 1.0
+    C2::R = 1.0
+    C3::R = 1e-3
     B::R = 1.0
-    ε::R = 1e-4
+    epsilon::R = 1e-4
     tmax::Int = 10_000
     verbose::Bool = true
 end
@@ -60,6 +60,14 @@ function softmax(x::AbstractArray{T}; normalize_values=true, dims=[], norm_dims=
         v1 = sum(exp.(x .- maxx), dims=dims)
         return v1 ./ sum(v1, dims=norm_dims)
     end
+end
+
+function neg_entropy(x::TA; dims=[]) where TA
+    return sum(map(y -> if y > 1e-10
+                y * log(y)
+            else
+                0.0
+            end, x), dims=dims)
 end
 
 function get_euclidean_distance(height::Int, width::Int)

@@ -73,19 +73,22 @@ function APDAGD(r::TA,
     W::TM,
     args::EOTArgs{R},
     frequency::Int=50) where {TA,TM,R}
-    prob = EOTProblem(η=args.ηp, r=r, c=c, W=W)
+    prob = EOTProblem(η=args.eta_p, r=r, c=c, W=W)
     p = softmax(-W ./ prob.η)
     λ0 = TA(zeros(2prob.N))
     state = APDAGDState(p=p, λ=λ0, L=1.)
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    time_current = time_ns()
     for i in 1:args.tmax
         bisection_search(state, prob)
         p_feas = round(state.p, r, c)
         obj = dot(p_feas, W)
         obj_infeas = dot(state.p, W)
+        pobj = obj_infeas + prob.η * sum(neg_entropy(p))
         if args.verbose && (i - 1) % frequency == 0
-            @printf "%d,%.14e,%.14e,%.14e,-1,dual_extrap\n" i state.infeas obj obj_infeas + φ(state.μ, prob)
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,APDAGD\n" (time_ns() - time_current) / 1e9 i state.infeas obj_infeas obj_infeas + prob.η * sum(neg_entropy(p)) prob.η * φ(state.λ, prob)
         end
-        if obj - obj_infeas <= args.ε / 6 && obj_infeas + φ(state.λ, prob) <= args.ε / 6
+        if obj - obj_infeas <= args.epsilon / 6 && pobj + prob.η * φ(state.λ, prob) <= args.epsilon / 6
             copy!(state.p, p_feas)
             break
         end

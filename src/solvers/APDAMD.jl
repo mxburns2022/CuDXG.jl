@@ -70,18 +70,22 @@ function APDAMD(r::TA,
     W::TM,
     args::EOTArgs{R},
     frequency::Int=50) where {TA,TM,R}
-    prob = EOTProblem(η=args.ηp, r=r, c=c, W=W)
+    prob = EOTProblem(η=args.eta_p, r=r, c=c, W=W)
     p = softmax(-W ./ prob.η)
     λ0 = TA(zeros(2prob.N))
     state = APDAMDState(p=p, λ=λ0, L=4. / prob.η)
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    time_start = time_ns()
     for i in 1:args.tmax
         bisection_search(state, prob)
         if args.verbose && (i - 1) % frequency == 0
             obj = dot(round(state.p, r, c), W)
-            @printf "%d,%.14e,%.14e,-1,dual_extrap\n" i state.infeas obj
-        end
-        if state.infeas <= args.ε
-            break
+            pobj = obj + prob.η * sum(neg_entropy(p))
+            dobj = prob.η * φ(state.μ, prob)
+            @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,APDAMD\n" (time_ns() - time_start) / 1e9 i state.infeas obj pobj dobj
+            if pobj + dobj < args.epsilon / 6 && state.infeas < args.epsilon / 6
+                break
+            end
         end
     end
     return state.p, state.μ[1:prob.N], state.μ[prob.N+1:end]

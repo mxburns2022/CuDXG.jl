@@ -13,7 +13,7 @@ function accelerated_sinkhorn(r::AbstractArray{R},
     # input 
     # WScaled = W
     n = size(r, 1)
-    K = -W ./ args.ηp
+    K = -W ./ args.eta_p
     if isa(W, CuArray)
         u = CUDA.zeros(R, n)
         v = CUDA.zeros(R, n)
@@ -42,15 +42,22 @@ function accelerated_sinkhorn(r::AbstractArray{R},
     function dual_value(u, v)
         return -sum(r'u) - sum(c'v) + sum(logsumexp(K .+ u .+ v'))
     end
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    time_current = time_ns()
     for i in 1:args.tmax
         if (i - 1) % frequency == 0
             p = exp.(K .+ ǔ .+ v̌')
             pr = round(p, r, c)
             feas = norm(sum(p, dims=1)' .- c, 1) + norm(sum(p, dims=2) .- r, 1)
             # println(ψ'c, " ", φ'r)
-            pobj = dot(pr, W)
+            obj = dot(pr, W)
+            pobj = obj + args.eta_p * sum(neg_entropy(pr))
+            dobj = -sum(logsumexp(K .+ ǔ .+ v̌')) - args.eta_p * sum(r'ǔ + c'v̌)
             # pdgap = -pobj + dobj
-            @printf "%d,%.14e,%.14e,-1,accelerated_sinkhorn\n" i feas pobj
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,accelerated_sinkhorn\n" (time_ns() - time_current) / 1e9 i feas obj pobj dobj
+            if pobj + dobj < args.epsilon / 6 && feas < args.epsilon / 6
+                break
+            end
         end
 
         ū = (1 - θ) .* ǔ + θ .* ũ

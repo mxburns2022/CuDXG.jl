@@ -11,7 +11,7 @@ function greenkhorn_log(r::AbstractArray{R},
     args::EOTArgs{R},
     frequency::Int=50) where {R}
     n = size(r, 1)
-    K = exp.(-W ./ args.ηp)
+    K = exp.(-W ./ args.eta_p)
 
     φ = ones(R, n) / n
     ψ = ones(R, n) / n
@@ -19,7 +19,8 @@ function greenkhorn_log(r::AbstractArray{R},
 
     rW = reshape(sum(ψ' .* K .* φ, dims=2) - r, n)
     cW = reshape(sum((ψ' .* K .* φ)', dims=2) - c, n)
-
+    time_start = time_ns()
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
     for k in 1:args.tmax*n
         i = argmax(abs.(rW))
         j = argmax(abs.(cW))
@@ -39,10 +40,11 @@ function greenkhorn_log(r::AbstractArray{R},
         end
         if args.verbose && (k - 1) % frequency == 0
             p = ψ' .* K .* φ
-            pr = round(p, r, c)
-            feas = norm(sum(pr, dims=1)' .- c, 1) + norm(sum(p, dims=2) .- r, 1)
+            # pr = round(p, r, c)
+            feas = norm(sum(p, dims=1)' .- c, 1) + norm(sum(p, dims=2) .- r, 1)
             pobj = dot(p, W)
-            @printf "%d,%.14e,%.14e,-1,greenkhorn\n" k feas pobj
+            dobj = -sum(log.(sum(p))) + sum(c'log.(ψ)) + sum(r'log.(φ))
+            @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,greenkhorn\n" (time_ns() - time_start) / 1e9 i feas pobj pobj + args.eta_p * sum(neg_entropy(p, dims=[1, 2])) dobj
         end
 
     end

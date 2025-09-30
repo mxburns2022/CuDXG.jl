@@ -48,6 +48,7 @@ settings = ArgParseSettings(prog="eotfom")
     "--frequency"
     help = "Printing frequency"
     default = 100
+    arg_type = Int
     "file1"
     help = "Path to target DOTMark-formatted file (row marginal) (TODO: Add support for more input types)"
     required = true
@@ -58,7 +59,6 @@ end
 
 
 parsed_args = parse_args(ARGS, settings)
-println(parsed_args)
 args = read_args_json(parsed_args["settings"])
 solver = parsed_args["algorithm"]
 marginal1, h, w, N = read_dotmark_data(parsed_args["file1"])
@@ -69,8 +69,8 @@ r = normalize(marginal1 .+ 1e-6, 1)
 c = normalize(marginal2 .+ 1e-6, 1)
 W = get_euclidean_distance(h, w)
 W∞ = norm(W, Inf)
-# args.ηp /= W∞
-# args.ε /= W∞
+# args.eta_p /= W∞
+# args.epsilon /= W∞
 W ./= W∞
 if parsed_args["cuda"]
     r, c, W = map(CuArray, [r, c, W])
