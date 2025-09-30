@@ -15,6 +15,7 @@ using LinearAlgebra
     a::R = 0.
     ā::R = 0.
     infeas::R = 0.
+    dobj::R = 0.
 end
 
 function dual_gradient!(output::TA, x::TA, prob::EOTProblem) where TA
@@ -40,7 +41,8 @@ function mirror_descent_step(state::APDAMDState, prob::EOTProblem)
     dual_gradient!(state.grad_cache, state.μ⁺, prob)
     state.z⁺ .= state.z - prob.N * a⁺ * state.grad_cache
     state.λ⁺ .= a⁺ / ā⁺ .* state.z⁺ + state.ā / ā⁺ .* state.λ
-    if φ(state.λ⁺, prob) - φ(state.μ⁺, prob) - (state.λ⁺ - state.μ⁺)' * state.grad_cache <= state.M / 2 * norm(state.λ⁺ - state.μ⁺, Inf)^2
+    state.dobj = φ(state.λ⁺, prob)
+    if state.dobj - φ(state.μ⁺, prob) - (state.λ⁺ - state.μ⁺)' * state.grad_cache <= state.M / 2 * norm(state.λ⁺ - state.μ⁺, Inf)^2
         state.a = a⁺
         state.ā = ā⁺
         copy!(state.z, state.z⁺)
@@ -85,9 +87,9 @@ function APDAMD(r::TA,
         if args.verbose && (i - 1) % frequency == 0
             obj = dot(round(state.p, r, c), W)
             pobj = obj + prob.η * sum(neg_entropy(p))
-            dobj = prob.η * φ(state.μ, prob)
+            dobj = prob.η * state.dobj
             @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,APDAMD\n" elapsed_time i state.infeas obj pobj dobj
-            if pobj + dobj < args.epsilon / 6 && state.infeas < args.epsilon / 6
+            if pobj + state.dobj < args.epsilon / 6 && state.infeas < args.epsilon / 6
                 break
             end
         end

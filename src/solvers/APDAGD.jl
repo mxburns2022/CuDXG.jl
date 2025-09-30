@@ -90,9 +90,9 @@ function APDAGD(r::TA,
             break
         end
         if args.verbose && (i - 1) % frequency == 0
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,APDAGD\n" elapsed_time i state.infeas obj_infeas obj_infeas + prob.η * sum(neg_entropy(p)) prob.η * φ(state.λ, prob)
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,APDAGD\n" elapsed_time i state.infeas obj_infeas pobj prob.η * φ(state.μ, prob)
         end
-        if obj - obj_infeas <= args.epsilon / 6 && pobj + prob.η * φ(state.λ, prob) <= args.epsilon / 6
+        if obj - obj_infeas <= args.epsilon / 6 && pobj + prob.η * φ(state.μ, prob) <= args.epsilon / 6
             copy!(state.p, p_feas)
             break
         end

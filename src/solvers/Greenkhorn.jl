@@ -5,16 +5,16 @@ using Test
 using BenchmarkTools
 
 
-function greenkhorn_log(r::AbstractArray{R},
-    c::AbstractArray{R},
-    W::AbstractMatrix{R},
+function greenkhorn_log(r::TA,
+    c::TA,
+    W::TM,
     args::EOTArgs{R},
-    frequency::Int=50) where {R}
+    frequency::Int=50) where {TA,TM,R}
     n = size(r, 1)
     K = exp.(-W ./ args.eta_p)
 
-    φ = ones(R, n) / n
-    ψ = ones(R, n) / n
+    φ = TA(ones(R, n)) / n
+    ψ = TA(ones(R, n)) / n
 
 
     rW = reshape(sum(ψ' .* K .* φ, dims=2) - r, n)
@@ -48,7 +48,7 @@ function greenkhorn_log(r::AbstractArray{R},
             feas = norm(sum(p, dims=1)' .- c, 1) + norm(sum(p, dims=2) .- r, 1)
             pobj = dot(p, W)
             dobj = -sum(log.(sum(p))) + sum(c'log.(ψ)) + sum(r'log.(φ))
-            @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,greenkhorn\n" elapsed_time i feas pobj pobj + args.eta_p * sum(neg_entropy(p, dims=[1, 2])) dobj
+            @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,greenkhorn\n" elapsed_time k feas pobj pobj + args.eta_p * sum(neg_entropy(p, dims=[1, 2])) dobj
         end
 
     end

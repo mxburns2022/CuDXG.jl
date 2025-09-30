@@ -1,4 +1,6 @@
 #file CuTransferEOT.jl
+
+
 module CuTransferEOT
 # no dependencies declared here
 include("Utilities.jl")
@@ -22,6 +24,7 @@ include("solvers/APDAMD.jl")
 include("solvers/APDAGD.jl")
 include("solvers/Greenkhorn.jl")
 include("solvers/AccSinkhorn.jl")
+
 solvers = Dict(
     "dual_extragradient" => extragradient_ot_dual,
     "primal_extragradient" => extragradient_ot,
@@ -31,7 +34,6 @@ solvers = Dict(
     "apdagd" => APDAGD,
     "accelerated_sinkhorn" => accelerated_sinkhorn
 )
-
 
 settings = ArgParseSettings(prog="eotfom")
 @add_arg_table! settings begin

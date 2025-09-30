@@ -2,7 +2,7 @@
 
 julia_version = "1.10.5"
 manifest_format = "2.0"
-project_hash = "37f8a9f4185680791750eb7539f5e988234673ba"
+project_hash = "16499b6bbc1f2f478a0c98a332f45a4566c106cc"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -227,6 +227,12 @@ deps = ["Statistics"]
 git-tree-sha1 = "05882d6995ae5c12bb5f36dd2ed3f61c98cbb172"
 uuid = "53c48c17-4a7d-5ca2-90c5-79b7896eea93"
 version = "0.8.5"
+
+[[deps.Formatting]]
+deps = ["Logging", "Printf"]
+git-tree-sha1 = "fb409abab2caf118986fc597ba84b50cbaf00b87"
+uuid = "59287772-0a20-5a39-b81b-1366585eb4c0"
+version = "0.4.3"
 
 [[deps.Future]]
 deps = ["Random"]
@@ -621,6 +627,12 @@ version = "1.11.0"
 deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
 uuid = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
 version = "7.2.1+1"
+
+[[deps.Suppressor]]
+deps = ["Logging"]
+git-tree-sha1 = "6dbb5b635c5437c68c28c2ac9e39b87138f37c0a"
+uuid = "fd094767-a336-5f1f-9728-57cf17d0bbfb"
+version = "0.2.8"
 
 [[deps.TOML]]
 deps = ["Dates"]
