@@ -9,19 +9,19 @@ using CUDA
 using ReverseDiff
 using Test
 using Random
-# marginal1, h, w = read_dotmark_data("/home/matt/Documents/bench/optimization/DOTmark_1.0/Data/ClassicImages/data32_1001.csv")
-# marginal2, h, w = read_dotmark_data("/home/matt/Documents/bench/optimization/DOTmark_1.0/Data/ClassicImages/data32_1004.csv")
-# r = normalize(CuArray(marginal1) + 1e-5 * CUDA.ones(h * w), 1)
-# c = normalize(CuArray(marginal2) + 1e-5 * CUDA.ones(h * w), 1)
-# W = normalize(CuArray(get_euclidean_distance(h, w)), Inf)
+marginal1, h, w = read_dotmark_data("/home/matt/Documents/bench/optimization/DOTmark_1.0/Data/ClassicImages/data32_1001.csv")
+marginal2, h, w = read_dotmark_data("/home/matt/Documents/bench/optimization/DOTmark_1.0/Data/ClassicImages/data32_1004.csv")
+r = normalize(CuArray(marginal1) + 1e-5 * CUDA.ones(h * w), 1)
+c = normalize(CuArray(marginal2) + 1e-5 * CUDA.ones(h * w), 1)
+W = normalize(CuArray(get_euclidean_distance(h, w)), Inf)
 rng = Xoshiro(0)
-N = 8
-r = normalize(rand(rng, N), 1)
-c = normalize(rand(rng, N), 1)
-W = rand(rng, N, N)
-W /= norm(W, Inf)
+# N = 8
+# r = normalize(rand(rng, N), 1)
+# c = normalize(rand(rng, N), 1)
+# W = rand(rng, N, N)
+# W /= norm(W, Inf)
 # r, c, W = map(CuArray, [r, c, W])
-args = EOTArgs(B=1.0, ηp=1e-1, ημ=0.0, tmax=1000, verbose=true, ε=1e-10)
+args = EOTArgs(B=1.0, ηp=1e-2, ημ=0.0, tmax=1000, verbose=true, ε=1e-10)
 
 function test_gradient()
     N = 5

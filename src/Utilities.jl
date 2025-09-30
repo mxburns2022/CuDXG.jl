@@ -1,6 +1,8 @@
 import CSV
 using DataFrames
+using JSON3
 using IterTools
+using StructTypes
 
 @kwdef struct EOTProblem{TA,TM,R}
     η::R
@@ -10,7 +12,7 @@ using IterTools
     b::TA = vcat(r, c)
     N = size(r, 1)
 end
-@kwdef struct EOTArgs{R}
+@kwdef mutable struct EOTArgs{R}
     ηp::R = 0.0
     ημ::R = 0.0
     C₁::R = 1.0
@@ -21,7 +23,7 @@ end
     tmax::Int = 10_000
     verbose::Bool = true
 end
-
+StructTypes.StructType(::Type{EOTArgs}) = StructTypes.Mutable()
 
 function logsumexp(x::AbstractArray{T}, dims=Nothing) where T<:Number
     if dims == Nothing
@@ -39,6 +41,12 @@ end
 function Zvals(x::AbstractArray{T}; dims=[]) where T
     maxx = maximum(x, dims=dims)
     return sum(exp.(x .- maxx), dims=dims)
+end
+
+function read_args_json(fpath::String)
+    json_string = read(fpath, String)
+    settings = JSON3.read(json_string, EOTArgs)
+    return settings
 end
 function softmax(x::AbstractArray{T}; normalize_values=true, dims=[], norm_dims=Nothing) where T<:Real
     if norm_dims == Nothing
