@@ -15,6 +15,7 @@ using LinearAlgebra
     a::R = 0.
     ā::R = 0.
     infeas::R = 0.
+    dobj::R = 0.
 end
 
 

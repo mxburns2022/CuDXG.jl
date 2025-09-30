@@ -67,7 +67,7 @@ function extragradient_ot(r::AbstractArray{R},
         if args.verbose && (i - 1) % frequency == 0
             pr = r .* p
             feas = norm(sum(pr, dims=1)' - c, 1)
-            obj = W∞ * dot(round(pr, r, c), W)
+            obj = W∞ * dot(p, W)
             pobj = primalv(p, W, W∞, ηp, r, c)
             dobj = dualv(μ⁺a, μ⁻a, _W, W, W∞, ηp, r, c)
 
