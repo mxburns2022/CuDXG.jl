@@ -1,4 +1,4 @@
-include("src/CuTransferEOT.jl")
+using CuTransferEOT
 using IterTools
 using Suppressor
 using Formatting
@@ -30,9 +30,9 @@ for (size, (ind1, ind2), solver, probclass, eps) in product(sizes, instance_pair
         "--algorithm", solver,
         "--settings", input_file,
         "--frequency", if solver == "greenkhorn"
-            "$(10 * size * size)"
+            "$(25 * size * size)"
         else
-            "10"
+            "25"
         end,
         file1, file2]
     if solver != "greenkhorn"

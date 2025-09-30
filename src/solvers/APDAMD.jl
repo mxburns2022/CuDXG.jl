@@ -18,20 +18,6 @@ using LinearAlgebra
     dobj::R = 0.
 end
 
-function dual_gradient!(output::TA, x::TA, prob::EOTProblem) where TA
-    grad_cache1 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=2)
-    grad_cache2 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=1)'
-    output .= vcat(grad_cache1, grad_cache2)
-    output .-= prob.b
-end
-
-function φ(x, prob::EOTProblem)
-    return sum(logsumexp(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')) - dot(prob.b, x)
-end
-
-function get_p(x, prob::EOTProblem)
-    return sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')
-end
 
 function mirror_descent_step(state::APDAMDState, prob::EOTProblem)
     state.M *= 2

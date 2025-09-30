@@ -3,6 +3,7 @@ using DataFrames
 using JSON3
 using IterTools
 using StructTypes
+using ArgParse
 
 @kwdef struct EOTProblem{TA,TM,R}
     η::R
@@ -44,6 +45,25 @@ function Zvals(x::AbstractArray{T}; dims=[]) where T
     return sum(exp.(x .- maxx), dims=dims)
 end
 
+@inline
+function dual_gradient!(output::TA, x::TA, prob::EOTProblem) where TA
+    grad_cache1 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=2)
+    grad_cache2 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=1)'
+    output .= vcat(grad_cache1, grad_cache2)
+    output .-= prob.b
+end
+# function f(p, prob::EOTProblem)
+#     return dot(p, prob.W)
+# end
+function φ(x, prob::EOTProblem)
+    return sum(logsumexp(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')) - dot(prob.b, x)
+end
+
+
+function get_p(x, prob::EOTProblem)
+    return sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')
+end
+
 function read_args_json(fpath::String)
     json_string = read(fpath, String)
     settings = JSON3.read(json_string, EOTArgs)
@@ -64,7 +84,7 @@ function sofitermax(x::AbstractArray{T}; normalize_values=true, dims=[], norm_di
 end
 
 function neg_entropy(x::TA; dims=[]) where TA
-    return sum(map(y -> if y > 1e-10
+    return sum(map(y -> if y > 1e-30
                 y * log(y)
             else
                 0.0

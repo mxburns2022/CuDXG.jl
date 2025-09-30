@@ -17,22 +17,8 @@ using LinearAlgebra
     infeas::R = 0.
 end
 
-function dual_gradient!(output::TA, x::TA, prob::EOTProblem) where TA
-    grad_cache1 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=2)
-    grad_cache2 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=1)'
-    output .= vcat(grad_cache1, grad_cache2)
-    output .-= prob.b
-end
-# function f(p, prob::EOTProblem)
-#     return dot(p, prob.W)
-# end
-function φ(x, prob::EOTProblem)
-    return sum(logsumexp(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')) - dot(prob.b, x)
-end
 
-function get_p(x, prob::EOTProblem)
-    return sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')
-end
+
 
 function mirror_descent_step(state::APDAGDState, prob::EOTProblem)
     state.M *= 2
@@ -43,7 +29,8 @@ function mirror_descent_step(state::APDAGDState, prob::EOTProblem)
     state.z⁺ .= state.z - a⁺ * state.grad_cache
     state.λ⁺ .= a⁺ / ā⁺ .* state.z⁺ + state.ā / ā⁺ .* state.λ
     # literally the same as APDAMD, the only difference is that we're using the L2 norm
-    if φ(state.λ⁺, prob) - φ(state.μ⁺, prob) - (state.λ⁺ - state.μ⁺)' * state.grad_cache <= state.M / 2 * norm(state.λ⁺ - state.μ⁺, 2)^2
+    state.dobj = φ(state.λ⁺, prob)
+    if state.dobj - φ(state.μ⁺, prob) - (state.λ⁺ - state.μ⁺)' * state.grad_cache <= state.M / 2 * norm(state.λ⁺ - state.μ⁺, 2)^2
         state.a = a⁺
         state.ā = ā⁺
         copy!(state.z, state.z⁺)
@@ -90,9 +77,9 @@ function APDAGD(r::TA,
             break
         end
         if args.verbose && (i - 1) % frequency == 0
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,APDAGD\n" elapsed_time i state.infeas obj_infeas pobj prob.η * φ(state.μ, prob)
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,APDAGD\n" elapsed_time i state.infeas obj_infeas pobj prob.η * state.dobj
         end
-        if obj - obj_infeas <= args.epsilon / 6 && pobj + prob.η * φ(state.μ, prob) <= args.epsilon / 6
+        if obj - obj_infeas <= args.epsilon / 6 && pobj + prob.η * state.dobj <= args.epsilon / 6
             copy!(state.p, p_feas)
             break
         end
