@@ -27,7 +27,7 @@ function sinkhorn_log(r::AbstractArray{R},
     end
     println("time(s),iter,infeas,ot_objective,primal,dual,solver")
     time_start = time_ns()
-    for i in 1:args.tmax
+    for i in 1:args.itermax
         # logsumexp!(cache1', maxcache', K .+ φ, 1)
         # logsumexp!(cache2, maxcache, K .+ (log.(c) - cache1)', 2)
         # φ .= log.(r) - cache2
@@ -39,6 +39,11 @@ function sinkhorn_log(r::AbstractArray{R},
             p = exp.(K .+ φ .+ ψ')
             feas = norm(sum(p, dims=1)' .- c, 1) + norm(sum(p, dims=2) .- r, 1)
         end
+        elapsed_time = (time_ns() - time_start) / 1e9
+        if elapsed_time > args.tmax
+            break
+        end
+
         if args.verbose && (i - 1) % frequency == 0
             ψ = reshape(log.(c) - logsumexp(K .+ φ, 1)', n)
             p = exp.(K .+ φ .+ ψ')
@@ -50,11 +55,12 @@ function sinkhorn_log(r::AbstractArray{R},
             # println()
             dobj = args.eta_p * (-c'ψ - sum(r'φ))
             # pdgap = -pobj + dobj
-            @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,sinkhorn\n" (time_ns() - time_start) / 1e9 i feas obj pobj dobj
+            @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,sinkhorn\n" elapsed_time i feas obj pobj dobj
             if pobj + dobj < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
         end
+
 
     end
     ψ = log.(c) - logsumexp(K .+ φ, 1)'

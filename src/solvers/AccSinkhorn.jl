@@ -35,16 +35,20 @@ function accelerated_sinkhorn(r::AbstractArray{R},
     end
     θ = 1
     function residual!(u, v)
-        normv = sum(softmax(K .+ u .+ v'; normalize_values=true))
-        residual_r .= softmax(K .+ u .+ v'; dims=2, normalize_values=true) ./ normv - r
-        residual_c .= softmax(K .+ u .+ v'; dims=1, normalize_values=true)' ./ normv - c
+        normv = sum(sofitermax(K .+ u .+ v'; normalize_values=true))
+        residual_r .= sofitermax(K .+ u .+ v'; dims=2, normalize_values=true) ./ normv - r
+        residual_c .= sofitermax(K .+ u .+ v'; dims=1, normalize_values=true)' ./ normv - c
     end
     function dual_value(u, v)
         return -sum(r'u) - sum(c'v) + sum(logsumexp(K .+ u .+ v'))
     end
     println("time(s),iter,infeas,ot_objective,primal,dual,solver")
-    time_current = time_ns()
-    for i in 1:args.tmax
+    time_start = time_ns()
+    for i in 1:args.itermax
+        elapsed_time = (time_ns() - time_start) / 1e9
+        if elapsed_time > args.tmax
+            break
+        end
         if (i - 1) % frequency == 0
             p = exp.(K .+ ǔ .+ v̌')
             pr = round(p, r, c)
@@ -54,7 +58,7 @@ function accelerated_sinkhorn(r::AbstractArray{R},
             pobj = obj + args.eta_p * sum(neg_entropy(pr))
             dobj = -sum(logsumexp(K .+ ǔ .+ v̌')) - args.eta_p * sum(r'ǔ + c'v̌)
             # pdgap = -pobj + dobj
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,accelerated_sinkhorn\n" (time_ns() - time_current) / 1e9 i feas obj pobj dobj
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,accelerated_sinkhorn\n" elapsed_time i feas obj pobj dobj
             if pobj + dobj < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end

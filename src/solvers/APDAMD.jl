@@ -18,8 +18,8 @@ using LinearAlgebra
 end
 
 function dual_gradient!(output::TA, x::TA, prob::EOTProblem) where TA
-    grad_cache1 = softmax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=2)
-    grad_cache2 = softmax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=1)'
+    grad_cache1 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=2)
+    grad_cache2 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=1)'
     output .= vcat(grad_cache1, grad_cache2)
     output .-= prob.b
 end
@@ -29,7 +29,7 @@ function φ(x, prob::EOTProblem)
 end
 
 function get_p(x, prob::EOTProblem)
-    return softmax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')
+    return sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')
 end
 
 function mirror_descent_step(state::APDAMDState, prob::EOTProblem)
@@ -71,18 +71,22 @@ function APDAMD(r::TA,
     args::EOTArgs{R},
     frequency::Int=50) where {TA,TM,R}
     prob = EOTProblem(η=args.eta_p, r=r, c=c, W=W)
-    p = softmax(-W ./ prob.η)
+    p = sofitermax(-W ./ prob.η)
     λ0 = TA(zeros(2prob.N))
     state = APDAMDState(p=p, λ=λ0, L=4. / prob.η)
     println("time(s),iter,infeas,ot_objective,primal,dual,solver")
     time_start = time_ns()
-    for i in 1:args.tmax
+    for i in 1:args.itermax
         bisection_search(state, prob)
+        elapsed_time = (time_ns() - time_start) / 1e9
+        if elapsed_time > args.tmax
+            break
+        end
         if args.verbose && (i - 1) % frequency == 0
             obj = dot(round(state.p, r, c), W)
             pobj = obj + prob.η * sum(neg_entropy(p))
             dobj = prob.η * φ(state.μ, prob)
-            @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,APDAMD\n" (time_ns() - time_start) / 1e9 i state.infeas obj pobj dobj
+            @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,APDAMD\n" elapsed_time i state.infeas obj pobj dobj
             if pobj + dobj < args.epsilon / 6 && state.infeas < args.epsilon / 6
                 break
             end

@@ -6,6 +6,7 @@
     "C3": 0.01,
     "B": 1.0,
     "target": 1e-8,
-    "tmax": 100000,
-    "verbose": true
+    "itermax": 100000,
+    "verbose": true,
+    "tmax": 2.5
 }

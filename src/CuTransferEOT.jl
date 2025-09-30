@@ -57,22 +57,28 @@ settings = ArgParseSettings(prog="eotfom")
     required = true
 end
 
-
-parsed_args = parse_args(ARGS, settings)
-args = read_args_json(parsed_args["settings"])
-solver = parsed_args["algorithm"]
-marginal1, h, w, N = read_dotmark_data(parsed_args["file1"])
-marginal2, h2, w2, N2 = read_dotmark_data(parsed_args["file2"])
-@assert h == h2 && w == w2 && N == N2
-# mix it with a little bit of the uniform distribution for stability
-r = normalize(marginal1 .+ 1e-6, 1)
-c = normalize(marginal2 .+ 1e-6, 1)
-W = get_euclidean_distance(h, w)
-W∞ = norm(W, Inf)
-# args.eta_p /= W∞
-# args.epsilon /= W∞
-W ./= W∞
-if parsed_args["cuda"]
-    r, c, W = map(CuArray, [r, c, W])
+function run_from_arguments(arguments::Vector{String})
+    parsed_args = parse_args(arguments, settings)
+    args = read_args_json(parsed_args["settings"])
+    solver = parsed_args["algorithm"]
+    marginal1, h, w, N = read_dotmark_data(parsed_args["file1"])
+    marginal2, h2, w2, N2 = read_dotmark_data(parsed_args["file2"])
+    @assert h == h2 && w == w2 && N == N2
+    # mix it with a little bit of the uniform distribution for stability
+    r = normalize(marginal1 .+ 1e-6, 1)
+    c = normalize(marginal2 .+ 1e-6, 1)
+    W = get_euclidean_distance(h, w)
+    W∞ = norm(W, Inf)
+    # args.eta_p /= W∞
+    # args.epsilon /= W∞
+    W ./= W∞
+    if parsed_args["cuda"]
+        r, c, W = map(CuArray, [r, c, W])
+    end
+    solvers[solver](r, c, W, args, parsed_args["frequency"])
 end
-solvers[solver](r, c, W, args, parsed_args["frequency"])
+
+
+if abspath(PROGRAM_FILE) == @__FILE__
+    run_from_arguments(ARGS)
+end

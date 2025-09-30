@@ -20,7 +20,8 @@ end
     C3::R = 1e-3
     B::R = 1.0
     epsilon::R = 1e-4
-    tmax::Int = 10_000
+    itermax::Int = 10_000
+    tmax::Float64 = Inf
     verbose::Bool = true
 end
 StructTypes.StructType(::Type{EOTArgs}) = StructTypes.Mutable()
@@ -48,7 +49,7 @@ function read_args_json(fpath::String)
     settings = JSON3.read(json_string, EOTArgs)
     return settings
 end
-function softmax(x::AbstractArray{T}; normalize_values=true, dims=[], norm_dims=Nothing) where T<:Real
+function sofitermax(x::AbstractArray{T}; normalize_values=true, dims=[], norm_dims=Nothing) where T<:Real
     if norm_dims == Nothing
         norm_dims = [1:ndims(x)...]
     end
