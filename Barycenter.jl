@@ -493,14 +493,14 @@ end
 WK = [(copy(W)) for _ in 1:m]
 args = EOTArgs(eta_p=1e-8, itermax=5000)
 # args = EOTArgs(eta_p=1e-8, itermax=10000)
-c1, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data32_1004.csv")
-c2, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data32_1007.csv")
-c3, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data32_1010.csv")
-c5, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data32_1008.csv")
-c6, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data32_1009.csv")
-c4, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data32_1003.csv")
+c1, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data64_1004.csv")
+c2, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data64_1007.csv")
+c3, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data64_1010.csv")
+c5, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data64_1008.csv")
+c6, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data64_1009.csv")
+c4, h, w = read_dotmark_data("/home/matt/Documents/bench/DOTmark_1.0/Data/Shapes/data64_1003.csv")
 W = CuArray(normalize(get_euclidean_distance(h, w), Inf))
-C = [CuArray(normalize(c1 .+ 1e-6, 1)), CuArray(normalize(c2 .+ 1e-6, 1)), CuArray(normalize(c4 .+ 1e-6, 1)), CuArray(normalize(c5 .+ 1e-6, 1)), CuArray(normalize(c6 .+ 1e-6, 1))]
+C = [CuArray(normalize(c1 .+ 1e-8, 1)), CuArray(normalize(c2 .+ 1e-8, 1)), CuArray(normalize(c5 .+ 1e-8, 1))]
 m = size(C, 1)
 WK = [W for i in 1:m]
 w = CUDA.ones(Float64, m)
@@ -513,7 +513,13 @@ w = CUDA.ones(Float64, m)
 #         print(outfile, "$(r[i]) ")
 #     end
 # end
-args = EOTArgs(eta_p=1e-6, itermax=20000)
+args = EOTArgs(eta_p=1e-7, itermax=10000)
+p, r, _, _ = extragradient_barycenter_dual(C, WK, args, w, 100)
+open("r64_sparse.txt", "w") do outfile
+    for i in axes(r, 1)
+        print(outfile, "$(r[i]) ")
+    end
+end
 # emdcost = sum(emd2(rt, C[i], W) for i in 1:m)
 # p, r2, _, _, _ = extragradient_ot_dual(C, WK, args, w, 500)
 # emdcost = dot(Array(w), emd2(Array(rt), Array(C[i]), Array(W)) for i in 1:m)
