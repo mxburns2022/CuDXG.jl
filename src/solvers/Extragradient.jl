@@ -5,11 +5,11 @@ using Random
 using Test
 
 function dualv(μ⁺, μ⁻, _W, W, W∞, ηp, r, c)
-    pμ = sofitermax(-(W * 0.5 .+ μ⁺' .- μ⁻') ./ ηp, norm_dims=2)
+    pμ = softmax(-(W * 0.5 .+ μ⁺' .- μ⁻') ./ ηp, norm_dims=2)
     return 0.5 * dot(_W, r .* pμ) + W∞ * dot((sum(r .* pμ, dims=1)' - c), μ⁺ - μ⁻) + ηp * dot(r, neg_entropy(pμ, dims=2))
 end
 function primalv(μ⁺p::TA, μ⁻p::TA, st::R, _W::TM, W::TM, W∞::R, ηp::R, r::TA, c::TA) where {TA,TM,R}
-    pμ = sofitermax(-(W * st * 0.5 .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
+    pμ = softmax(-(W * st * 0.5 .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
     return 0.5 * dot(_W, r .* pμ) + W∞ * norm((sum(r .* pμ, dims=1)' - c), 1) + ηp * dot(r, neg_entropy(pμ, dims=2))
 end
 
@@ -48,7 +48,7 @@ function extragradient_ot(r::AbstractArray{R},
     eta_mu = args.C2 * sqrt(args.B) ./ (c .+ args.C3 / n)
     ηπ = args.C2 / sqrt(args.B) ./ r
     if p0 == Nothing
-        p = sofitermax(-r .* (W * 0.5 .+ (μ⁺' .- μ⁻')) ./ ηπ; norm_dims=2)
+        p = softmax(-r .* (W * 0.5 .+ (μ⁺' .- μ⁻')) ./ ηπ; norm_dims=2)
     else
         if isa(W, CuArray)
             p = CuArray(p0) ./ r
@@ -409,7 +409,7 @@ function extragradient_ot_dual(r::CuArray{R},
     st = s0
 
     # function infeas(μ⁺, μ⁻)
-    #     p = sofitermax(-(W * 0.5 * st .+ μ⁺' .- μ⁻') ./ ηp, norm_dims=2)
+    #     p = softmax(-(W * 0.5 * st .+ μ⁺' .- μ⁻') ./ ηp, norm_dims=2)
     #     return sum(r .* p, dims=1)' - c
     # end
     # maxj = reshape(maximum(W, dims=2), n)
@@ -435,7 +435,7 @@ function extragradient_ot_dual(r::CuArray{R},
             break
         end
         if (i - 1) % frequency == 0
-            obj = dot(W, r .* sofitermax(-(W * 0.5 * st .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2))
+            obj = dot(W, r .* softmax(-(W * 0.5 * st .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2))
             # pr = r .* p
             # feas = norm(sum(pr, dims=1)' - c, 1)
             feas = norm(c - residual_storage, 1)
@@ -454,7 +454,7 @@ function extragradient_ot_dual(r::CuArray{R},
         @cuda threads = threads blocks = linear_blocks update_μ(μ⁺p, μ⁻p, μ⁺p, μ⁻p, μ⁺t, μ⁻t, ηp)
         # ηp *= 0.99
     end
-    p = sofitermax(-(W * 0.5 * st .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
+    p = softmax(-(W * 0.5 * st .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
     return r .* p, μ⁺, μ⁻, st
 end
 
@@ -505,13 +505,13 @@ function extragradient_ot_dual(r::AbstractArray{R},
             break
         end
         if (i - 1) % frequency == 0
-            p = sofitermax(-(W * 0.5 * st .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
+            p = softmax(-(W * 0.5 * st .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
             pr = r .* p
             feas = norm(sum(pr, dims=1)' - c, 1)
             obj = dot(round(pr, r, c), _W)
             pobj = primalv(p, _W, W∞, ηp, r, c)
             dobj = dualv(μ⁺a, μ⁻a, _W, W, W∞, ηp, r, c)
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,dual_extrap\n" elapsed_time i feas obj pobj dobj
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,%.14e,dual_extrap\n" elapsed_time i feas obj pobj dobj norm(μ⁺a - μ⁺) + norm(μ⁻a - μ⁻)
             if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
@@ -524,6 +524,12 @@ function extragradient_ot_dual(r::AbstractArray{R},
         normv = (μ⁻t + μ⁺t)
         μ⁻t = μ⁻t ./ normv
         μ⁺t = μ⁺t ./ normv
+        μ⁻ta = max.(μ⁻t, exp(-args.B) .* max.(μ⁺t, μ⁻t))
+        μ⁺ta = max.(μ⁺t, exp(-args.B) .* max.(μ⁺t, μ⁻t))
+        normv = (μ⁻ta + μ⁺ta)
+
+        μ⁻t = μ⁻ta ./ normv
+        μ⁺t = μ⁺ta ./ normv
 
         μ⁺pa .= μ⁺p + ηp * (μ⁺a - μ⁺p)
         μ⁻pa .= μ⁻p + ηp * (μ⁻a - μ⁻p)
@@ -550,11 +556,13 @@ function extragradient_ot_dual(r::AbstractArray{R},
         μ⁻a = max.(μ⁻, exp(-args.B) .* max.(μ⁺, μ⁻))
         μ⁺a = max.(μ⁺, exp(-args.B) .* max.(μ⁺, μ⁻))
         normv = (μ⁻a + μ⁺a)
-        μ⁻a ./= normv
-        μ⁺a ./= normv
+
+        μ⁻a = μ⁻a ./ normv
+        μ⁺a = μ⁺a ./ normv
+        # println(norm(μ⁺a - μ⁺) + norm(μ⁻a - μ⁻))
 
     end
-    p = sofitermax(-(W * 0.5 * st .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
+    p = softmax(-(W * 0.5 * st .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
     return r .* p, μ⁺, μ⁻, st
 end
 

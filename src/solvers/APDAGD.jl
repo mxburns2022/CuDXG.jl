@@ -62,7 +62,7 @@ function APDAGD(r::TA,
     args::EOTArgs{R},
     frequency::Int=50) where {TA,TM,R}
     prob = EOTProblem(η=args.eta_p, r=r, c=c, W=W)
-    p = sofitermax(-W ./ prob.η)
+    p = softmax(-W ./ prob.η)
     λ0 = TA(zeros(2prob.N))
     state = APDAGDState(p=p, λ=λ0, L=1.)
     println("time(s),iter,infeas,ot_objective,primal,dual,solver")

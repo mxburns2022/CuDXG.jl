@@ -47,8 +47,8 @@ end
 
 @inline
 function dual_gradient!(output::TA, x::TA, prob::EOTProblem) where TA
-    grad_cache1 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=2)
-    grad_cache2 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=1)'
+    grad_cache1 = softmax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=2)
+    grad_cache2 = softmax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=1)'
     output .= vcat(grad_cache1, grad_cache2)
     output .-= prob.b
 end
@@ -61,7 +61,7 @@ end
 
 
 function get_p(x, prob::EOTProblem)
-    return sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')
+    return softmax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')
 end
 
 function read_args_json(fpath::String)
@@ -69,7 +69,7 @@ function read_args_json(fpath::String)
     settings = JSON3.read(json_string, EOTArgs)
     return settings
 end
-function sofitermax(x::AbstractArray{T}; normalize_values=true, dims=[], norm_dims=Nothing) where T<:Real
+function softmax(x::AbstractArray{T}; normalize_values=true, dims=[], norm_dims=Nothing) where T<:Real
     if norm_dims == Nothing
         norm_dims = [1:ndims(x)...]
     end
