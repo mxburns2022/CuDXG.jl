@@ -370,6 +370,12 @@ function test_warp_logsumexp!()
 
 
 end
+
+# +-------------------------+
+# |   This one brings joy   |
+# +-------------------------+
+#       (◠‿◠)
+#     ノ( ♥ )
 function extragradient_ot_dual(r::CuArray{R},
     c::CuArray{R},
     _W::CuArray{R},
@@ -458,6 +464,12 @@ function extragradient_ot_dual(r::CuArray{R},
     return r .* p, μ⁺, μ⁻, st
 end
 
+
+# +------------------------------+
+# |   This one also brings joy   |
+# +------------------------------+
+#       (◠‿◠)
+#     ノ( ♥ )
 function extragradient_ot_dual(r::AbstractArray{R},
     c::AbstractArray{R},
     _W::AbstractMatrix{R},
@@ -564,6 +576,90 @@ function extragradient_ot_dual(r::AbstractArray{R},
     end
     p = softmax(-(W * 0.5 * st .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
     return r .* p, μ⁺, μ⁻, st
+end
+
+# +-----------------------------+
+# | This one does not bring joy |
+# +-----------------------------+
+#          (¬_¬)
+#        /(_____)\
+function extragradient_ot_full_dual(r::AbstractArray{R},
+    c::AbstractArray{R},
+    _W::AbstractMatrix{R},
+    args::EOTArgs{R},
+    frequency::Int=50;
+    s0::Float64=0.0
+) where {R}
+    W∞ = norm(_W, Inf)
+    ηp = args.eta_p / 2 / W∞
+    W = _W ./ W∞
+    n = size(r, 1)
+
+    μ⁺ = ones(R, n) * 0.5
+
+    sumvals = zeros(R, n)
+    residual_storage = zeros(R, n)
+    maxvals = zeros(R, n)
+
+
+    μ⁻ = copy(μ⁺)
+    μ⁻t = copy(μ⁻)
+    μ⁺t = copy(μ⁺)
+    eta_mu = ηp #* args.C2 ./ (c .+ args.C3 / n)
+    st = s0
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    time_start = time_ns()
+    function infeas(μ⁺, μ⁻)
+
+        maximum!(maxvals, -(W * 0.5 .+ μ⁺' .- μ⁻') ./ ηp)
+
+        sum!(sumvals, exp.(-(W * 0.5 .+ μ⁺' .- μ⁻') ./ ηp .- maxvals))
+        sum!(residual_storage', exp.(-(W * 0.5 .+ μ⁺' .- μ⁻') ./ ηp .- maxvals .- log.(sumvals) .+ log.(r)))
+        # return 
+    end
+    function ΔBProject!(μ⁺, μ⁻)
+        normv = (μ⁺ + μ⁺)
+
+        μ⁻ .= μ⁻ ./ normv
+        μ⁺ .= μ⁺ ./ normv
+        μ⁻adjust = max.(μ⁻, exp(-args.B) .* max.(μ⁺, μ⁻))
+        μ⁺adjust = max.(μ⁺, exp(-args.B) .* max.(μ⁺, μ⁻))
+        normv = (μ⁺adjust + μ⁻adjust)
+
+        μ⁻ .= μ⁻adjust ./ normv
+        μ⁺ .= μ⁺adjust ./ normv
+    end
+    for i in 1:args.itermax
+        elapsed_time = (time_ns() - time_start) / 1e9
+        if elapsed_time > args.tmax
+            break
+        end
+        if (i - 1) % frequency == 0
+            p = softmax(-(W * 0.5 .+ μ⁺' .- μ⁻') ./ ηp, norm_dims=2)
+            pr = r .* p
+            feas = norm(sum(pr, dims=1)' - c, 1)
+            obj = dot(round(pr, r, c), _W)
+            pobj = primalv(p, _W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺, μ⁻, _W, W, W∞, ηp, r, c)
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,dual_extrap\n" elapsed_time i feas obj pobj dobj
+            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
+                break
+            end
+        end
+
+        infeas(μ⁺, μ⁻)
+        μ⁻t = μ⁻ .^ (1 - args.eta_mu) .* exp.(-eta_mu .* (residual_storage - c))
+        μ⁺t = μ⁺ .^ (1 - args.eta_mu) .* exp.(eta_mu .* (residual_storage - c))
+        ΔBProject!(μ⁺t, μ⁻t)
+        infeas(μ⁺t, μ⁻t)
+        μ⁻ = μ⁻ .^ (1 - args.eta_mu) .* exp.(-eta_mu .* (residual_storage - c))
+        μ⁺ = μ⁺ .^ (1 - args.eta_mu) .* exp.(eta_mu .* (residual_storage - c))
+        ΔBProject!(μ⁺, μ⁻)
+        # println(norm(μ⁺ - μ⁻))
+
+    end
+    p = softmax(-(W * 0.5 .+ μ⁺' .- μ⁻') ./ ηp, norm_dims=2)
+    return r .* p, μ⁺, μ⁻
 end
 
 

@@ -11,7 +11,7 @@ include("solvers/Greenkhorn.jl")
 include("solvers/AccSinkhorn.jl")
 include("CmdLine.jl")
 export read_dotmark_data, get_euclidean_distance
-export extragradient_ot, extragradient_ot_dual
+export extragradient_ot, extragradient_ot_dual, extragradient_ot_full_dual
 export sinkhorn_log
 export EOTArgs
 export run_from_arguments, solvers
