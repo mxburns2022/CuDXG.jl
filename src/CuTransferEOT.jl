@@ -3,6 +3,7 @@
 module CuTransferEOT
 # no dependencies declared here
 include("Utilities.jl")
+include("ImgUtilities.jl")
 include("solvers/Extragradient.jl")
 include("solvers/ExtragradientKernel.jl")
 include("solvers/Sinkhorn.jl")

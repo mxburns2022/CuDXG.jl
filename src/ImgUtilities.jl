@@ -16,6 +16,10 @@ function flatten_image(img::AbstractArray{T}) where T<:Real
     return img_rearranged, original_shape
 end
 
+@inline function rgb_distance(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b)
+    return (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
+end
+
 function restore_image(img::AbstractArray{T}, original_shape::Tuple) where T<:Real
     channels, w, h = original_shape
     return reshape(img, (channels, w, h))

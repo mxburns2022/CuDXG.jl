@@ -44,9 +44,6 @@ function residual_spp_c!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
     return
 end
 
-@inline function rgb_distance(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b)
-    return (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-end
 
 function naive_findmaxindex_spp_ct!(output_img::CuDeviceMatrix{T}, img1::CuDeviceMatrix{T},
     img2::CuDeviceMatrix{T}, μ::CuDeviceVector{T}, logZi::CuDeviceVector{T}, reg::T, st::T) where T

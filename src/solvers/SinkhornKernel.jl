@@ -39,9 +39,6 @@ function residual!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
     return
 end
 
-@inline function rgb_distance(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b)
-    return (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-end
 
 @inline function eot_exponent(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b, φi, ψj, η)
     return -(rgb_distance(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b)) / reg + ψj + φi + η
@@ -335,13 +332,13 @@ function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, η::T, maxi
             println("$(residual_c) $(residual_r) $(objective)")
         end
     end
-    index_set_r = CUDA.zeros(Int, N)
-    index_set_c = CUDA.zeros(Int, N)
+    output_img1 = CUDA.zeros(T, 3, N)
+    output_img2 = CUDA.zeros(T, 3, N)
     naive_blocks = div(N, threads, RoundUp)
-    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(index_set_r, img1, img2, φ, ψ, η)
-    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(index_set_c, img2, img1, ψ, φ, η)
+    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(output_img1, img1, img2, φ, ψ, η)
+    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(output_img2, img2, img1, ψ, φ, η)
 
-    return φ, ψ, Array(index_set_r), Array(index_set_c)
+    return φ, ψ, Array(output_img1), Array(output_img2)
 
 end
 function test_sinkhorn()
@@ -356,7 +353,7 @@ end
 function sinkhorn_color_transfer(f1::String, f2::String, out_f1::String, out_f2::String, η::Float64, resolution::Int, maxiter::Int)
     img1, dims1 = load_rgb(f1; cuda=true, size=(resolution, resolution))
     img2, dims2 = load_rgb(f2; cuda=true, size=(resolution, resolution))
-    _, img1_new, img2_new = sinkhorn_color_transfer(img1, img2, η, maxiter)
+    _, _, img1_new, img2_new = sinkhorn_color_transfer(img1, img2, η, maxiter)
     save_image(out_f1, img1_new, dims1)
     save_image(out_f2, img2_new, dims2)
 end
