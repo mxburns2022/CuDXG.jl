@@ -1,15 +1,19 @@
 using CUDA
+using IterTools
+using LinearAlgebra
 
 
 
-function residual_c!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
-    img2::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, μ⁻::CuDeviceVector{T}, logZi::CuDeviceVector{T}, reg::T) where T
+function residual_spp_c!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
+    img2::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, logZi::CuDeviceVector{T}, reg::T, st::T) where T
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
     N = size(img1, 2)
     N_outer = Int(ceil(N / nwarps))
     local_id = (threadIdx().x - 1) % step
+    α = 0.5st
+    invreg = 1 / reg
     for i in 1:N_outer
         if tid_x > N
             return
@@ -17,24 +21,23 @@ function residual_c!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
         pix1r = img2[1, tid_x]
         pix1g = img2[2, tid_x]
         pix1b = img2[3, tid_x]
-        diff = μ⁺[diff] - μ⁻[diff]
+        diff = 2μ⁺[tid_x] - 1
 
         local_acc = 0.0
         for i in 1:step:N
             if i + local_id > N
                 break
             end
-            pix2r = img2[1, i+local_id]
-            pix2g = img2[2, i+local_id]
-            pix2b = img2[3, i+local_id]
+            pix2r = img1[1, i+local_id]
+            pix2g = img1[2, i+local_id]
+            pix2b = img1[3, i+local_id]
             l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-            value = -(l2dist + diff) / reg - logZi
+            value = -(l2dist * α + diff) * invreg - logZi[i+local_id]
             local_acc += exp(value)
         end
         local_acc2 = CUDA.reduce_warp(+, local_acc)
-        sync_warp()
         if local_id == 0
-            output[tid_x] = -N - local_acc2
+            output[tid_x] = local_acc2 / N - 1 / N
         end
         tid_x += nwarps
     end
@@ -45,8 +48,8 @@ end
     return (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
 end
 
-function naive_findmaxindex_ct!(output::CuDeviceVector{Int}, img1::CuDeviceMatrix{T},
-    img2::CuDeviceMatrix{T}, φ::CuDeviceVector{T}, ψ::CuDeviceVector{T}, reg::T) where T
+function naive_findmaxindex_spp_ct!(output_img::CuDeviceMatrix{T}, img1::CuDeviceMatrix{T},
+    img2::CuDeviceMatrix{T}, μ::CuDeviceVector{T}, logZi::CuDeviceVector{T}, reg::T, st::T) where T
     tid_x = threadIdx().x + (blockIdx().x - 1) * blockDim().x
     N = size(img1, 2)
     if tid_x > N
@@ -55,28 +58,77 @@ function naive_findmaxindex_ct!(output::CuDeviceVector{Int}, img1::CuDeviceMatri
     pix1r = img1[1, tid_x]
     pix1g = img1[2, tid_x]
     pix1b = img1[3, tid_x]
-    φi = φ[tid_x]
-    maxval = -Inf
-    maxind = Int(-1)
+    avgr = 0.0
+    avgg = 0.0
+    avgb = 0.0
+    probsum = 0.0
+    norm = logZi[tid_x]
     for i in 1:N
         pix2r = img2[1, i]
         pix2g = img2[2, i]
         pix2b = img2[3, i]
+        diff = 2μ[i] - 1
         l2dist = rgb_distance(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b)
-        value = -(l2dist) / reg + φi + ψ[i]
-        if value > maxval
-            maxval = value
-            maxind = i
-        end
+        prob = exp(-(l2dist * 0.5st + diff) / reg - norm)
+        avgr += img2[1, i] * prob
+        avgg += img2[2, i] * prob
+        avgb += img2[3, i] * prob
     end
-    output[tid_x] = maxind
+    # @cuprintln(probsum)
+    output_img[1, tid_x] = avgr
+    output_img[2, tid_x] = avgg
+    output_img[3, tid_x] = avgb
 
+    return
+end
+function update_μ_ct(μ⁺::CuDeviceArray{R}, μ⁻::CuDeviceArray{R}, μ⁺_1::CuDeviceArray{R}, μ⁻_1::CuDeviceArray{R}, μ⁺_2::CuDeviceArray{R}, μ⁻_2::CuDeviceArray{R}, η) where R
+    N = size(μ⁺, 1)
+    tid = threadIdx().x + blockDim().x * (blockIdx().x - 1)
+    if tid > N
+        return
+    end
+    new_μplus = μ⁺_1[tid] + η * (μ⁺_2[tid] - μ⁺_1[tid])
+    new_μminus = μ⁻_1[tid] + η * (μ⁻_2[tid] - μ⁻_1[tid])
+    normv = new_μplus + new_μminus
+    new_μplus /= normv
+    new_μminus /= normv
+    μ⁺[tid] = new_μplus
+    μ⁻[tid] = new_μminus
 
     return
 end
 
-function warp_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
-    img2::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, μ⁻::CuDeviceVector{T}, reg::T) where T
+
+function update_μ_residual_ct(μ⁺::CuDeviceArray{R}, μ⁻::CuDeviceArray{R}, μ⁺a::CuDeviceArray{R}, μ⁻a::CuDeviceArray{R}, residual::CuDeviceArray{R}, ημᵢ::R, ημ::R, B::R, adjust::Bool) where R
+    N = size(μ⁺, 1)
+    tid = threadIdx().x + blockDim().x * (blockIdx().x - 1)
+    if tid > N
+        return
+    end
+    difference = residual[tid]
+    maxval = ημᵢ * max(-difference, difference)
+    new_μ⁺ = μ⁺a[tid]^(1 - ημ) * exp(ημᵢ * (difference) - maxval)
+    new_μ⁻ = μ⁻a[tid]^(1 - ημ) * exp(-ημᵢ * (difference) - maxval)
+    normv = new_μ⁺ + new_μ⁻
+    new_μ⁺ /= normv
+    new_μ⁻ /= normv
+
+    μ⁺[tid] = new_μ⁺
+    μ⁻[tid] = new_μ⁻
+    if adjust
+        new_μ⁻a = max(new_μ⁻, exp(-B) * max(new_μ⁺, new_μ⁻))
+        new_μ⁺a = max(new_μ⁺, exp(-B) * max(new_μ⁺, new_μ⁻))
+        normv = (new_μ⁻a + new_μ⁺a)
+        new_μ⁺a /= normv
+        new_μ⁻a /= normv
+        μ⁺a[tid] = new_μ⁺a
+        μ⁻a[tid] = new_μ⁻a
+    end
+
+    return
+end
+function warp_logsumexp_spp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
+    img2::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, reg::T, st::T) where T
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
@@ -99,7 +151,7 @@ function warp_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
             pix2g = img2[2, i+local_id]
             pix2b = img2[3, i+local_id]
             l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-            value = -(l2dist + μ⁺[i+local_id] - μ⁻[i+local_id]) / reg
+            value = -(l2dist * 0.5 * st + 2μ⁺[i+local_id] - 1.) / reg
             maxval = max(value, maxval)
         end
         maxval = CUDA.reduce_warp(max, maxval)
@@ -118,7 +170,7 @@ function warp_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
             pix2g = img2[2, i+local_id]
             pix2b = img2[3, i+local_id]
             l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-            value = -(l2dist + μ⁺[i+local_id] - μ⁻[i+local_id]) / reg
+            value = -(l2dist * 0.5 * st + 2μ⁺[i+local_id] - 1) / reg
             local_acc += exp(value - maxval)
         end
         local_acc2 = CUDA.reduce_warp(+, local_acc)
@@ -131,7 +183,7 @@ function warp_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
     return
 end
 
-function naive_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
+function naive_logsumexp_spp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
     img2::CuDeviceMatrix{T}, ψ::CuDeviceVector{T}, reg::T) where T
     tid_x = threadIdx().x + (blockIdx().x - 1) * blockDim().x
     N = size(img1, 2)
@@ -164,146 +216,69 @@ function naive_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
     # end
     return
 end
-@inline function reduce_block(op, val::T, neutral, shared) where T
-    threads = blockDim().x
-    thread = threadIdx().x
 
-    # shared mem for a complete reduction
-    @inbounds shared[thread] = val
-
-    # perform a reduction
-    d = 1
-    while d < threads
-        sync_threads()
-        index = 2 * d * (thread - 1) + 1
-        @inbounds if index <= threads
-            other_val = if index + d <= threads
-                shared[index+d]
-            else
-                neutral
-            end
-            shared[index] = op(shared[index], other_val)
-        end
-        d *= 2
-    end
-
-    # load the final value on the first thread
-    if thread == 1
-        val = @inbounds shared[thread]
-    end
-
-    return val
-end
-function block_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
-    img2::CuDeviceMatrix{T}, ψ::CuDeviceVector{T}, reg::T) where T
-    step = blockDim().x
-    # nwarps = (gridDim().x * blockDim().x) ÷ step
-    tid_x = blockIdx().x
+function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, η::T, maxiter::Int=10000, frequency::Int=100) where T<:Real
     N = size(img1, 2)
-    local_id = threadIdx().x - 1
-    shared = CuStaticSharedArray(T, (1024,))
+    μ⁺ = 0.5 * CUDA.ones(T, N)
+    μ⁻ = 0.5 * CUDA.ones(T, N)
+    μt⁺ = 0.5 * CUDA.ones(T, N)
+    μt⁻ = 0.5 * CUDA.ones(T, N)
+    ν⁺ = 0.5 * CUDA.ones(T, N)
+    ν⁻ = 0.5 * CUDA.ones(T, N)
+    νt⁺ = 0.5 * CUDA.ones(T, N)
+    νt⁻ = 0.5 * CUDA.ones(T, N)
+    residual_cache = CUDA.zeros(T, N)
+    sumvals = CUDA.zeros(T, N)
+    eta_mu = 1. / (1.01 / N)
+    threads = 256
+    B = 1.0
+    warp_blocks = div(N, div(threads, 32, RoundDown), RoundUp)
+    linear_blocks = div(N, threads, RoundUp)
+    st = 0.0
+    @inline function infeas(μ⁺)
+        @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct!(sumvals, img1, img2, μ⁺, η, st)
+        CUDA.synchronize()
+        @cuda threads = threads blocks = warp_blocks residual_spp_c!(residual_cache, img1, img2, μ⁺, sumvals, η, st)
+        CUDA.synchronize()
+    end
+    for i in 1:maxiter
+        # perform the extragradient step
+        infeas(ν⁺)
+        # println("update1")
+        @cuda threads = threads blocks = linear_blocks update_μ_residual_ct(μt⁺, μt⁻, μ⁺, μ⁻, residual_cache, eta_mu, 0.0, B, false)
+        # println("update2")
+        @cuda threads = threads blocks = linear_blocks update_μ_ct(νt⁺, νt⁻, ν⁺, ν⁻, μ⁺, μ⁻, η)
+        st = (1 - η) * st + η
+        infeas(νt⁺)
+        @cuda threads = threads blocks = linear_blocks update_μ_residual_ct(μ⁺, μ⁻, μ⁺, μ⁻, residual_cache, eta_mu, 0.0, B, true)
+        @cuda threads = threads blocks = linear_blocks update_μ_ct(ν⁺, ν⁻, ν⁺, ν⁻, μt⁺, μt⁻, η)
 
-    if tid_x > N
-        return
-    end
-    pix1r = img1[1, tid_x]
-    pix1g = img1[2, tid_x]
-    pix1b = img1[3, tid_x]
-    maxval = -Inf
-    for i in 1:step:N
-        # if tid_x == 1 && local_id == 0
-        #     @cuprintln("$(step)")
-        # end
-        if i + local_id > N
-            break
+        CUDA.synchronize()
+        if (i - 1) % frequency == 0
+            @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct!(sumvals, img1, img2, ν⁺, η, st)
+            @cuda threads = threads blocks = warp_blocks residual_spp_c!(residual_cache, img1, img2, ν⁺, sumvals, η, st)
+            CUDA.synchronize()
+            residual_c = sum(abs.(residual_cache))
+            # println(residual_cache)
+            objective = -sum(2μ⁺ .- 1) / N - η * sum(sumvals) / N
+            println("$(i) $(residual_c) $(objective)")
         end
-        pix2r = img2[1, i+local_id]
-        pix2g = img2[2, i+local_id]
-        pix2b = img2[3, i+local_id]
-        l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-        value = -(l2dist) / reg + ψ[i+local_id]
-        maxval = max(value, maxval)
     end
-    maxval = reduce_block(max, maxval, -Inf, shared)
-    if local_id == 0
-        output[tid_x] = maxval
-    end
-    sync_threads()
-    maxval = output[tid_x]
+    output_img1 = CUDA.zeros(Float64, 3, N)
+    output_img2 = CUDA.zeros(Float64, 3, N)
 
-    local_acc = 0.0
-    for i in 1:step:N
-        if i + local_id > N
-            break
-        end
-        pix2r = img2[1, i+local_id]
-        pix2g = img2[2, i+local_id]
-        pix2b = img2[3, i+local_id]
-        l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-        value = -(l2dist) / reg + ψ[i+local_id]
-        local_acc += exp(value - maxval)
-    end
-    local_acc2 = reduce_block(+, local_acc, 0.0, shared)#CUDA.reduce_warp(+, local_acc)
-    sync_threads()
-    if local_id == 0
-        output[tid_x] = -log(N) - (log(local_acc2) + maxval)
-    end
-    # tid_x += nwarps
-    return
+    @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct!(sumvals, img1, img2, ν⁺, η, st)
+    @cuda threads = threads blocks = linear_blocks naive_findmaxindex_spp_ct!(output_img1, img1, img2, ν⁺, sumvals, η, st)
+    @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct!(sumvals, img2, img1, ν⁺, η, st)
+    @cuda threads = threads blocks = linear_blocks naive_findmaxindex_spp_ct!(output_img2, img2, img1, ν⁺, sumvals, η, st)
+    return ν⁺, Array(output_img1), Array(output_img2)
+
 end
-function test_logsumexp_kernel()
-    N = 100
-    img1 = rand(3, N)
-    img2 = rand(3, N)
-    W = zeros(N, N)
-    η = 1e-2
-    for (i, j) in product(axes(W, 1), axes(W, 2))
-        pix1r = img1[1, i]
-        pix1g = img1[2, i]
-        pix1b = img1[3, i]
-        pix2r = img2[1, j]
-        pix2g = img2[2, j]
-        pix2b = img2[3, j]
-        W[i, j] = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-    end
-    ψ = zeros(N)
-    φ = zeros(N)
 
-    maxvalsr = maximum(-W ./ η .+ ψ', dims=2)
-    φ = -log(N) .- (log.(sum(exp.(-W ./ η .+ ψ' .- maxvalsr), dims=2)) + maxvalsr)
-    φ_cu = CuArray(reshape(φ, N))
-
-    maxvalsc = maximum(-W ./ η .+ φ, dims=1)
-    ψ = -log(N) .- (log.(sum(exp.(-W ./ η .+ φ .- maxvalsc), dims=1)) + maxvalsc)'
-    ψ_cu = CuArray(reshape(ψ, N))
-    maxvalsr = maximum(-W ./ η .+ ψ', dims=2)
-    logsumexp_value_r = -log(N) .- (log.(sum(exp.(-W ./ η .+ ψ' .- maxvalsr), dims=2)) + maxvalsr)
-    maxvalsc = maximum((-W ./ η .+ φ), dims=1)
-    logsumexp_value_c = -log(N) .- (log.(sum(exp.(-W ./ η .+ φ .- maxvalsc), dims=1)) + maxvalsc)'
-    output_r = CuArray(zeros(N))
-    output_c = CuArray(zeros(N))
-    img1_cu = CuArray(img1)
-    img2_cu = CuArray(img2)
-    @cuda threads = 256 blocks = 32 warp_logsumexp_ct!(output_r, img1_cu, img2_cu, ψ_cu, η)
-    @cuda threads = 256 blocks = 32 warp_logsumexp_ct!(output_c, img2_cu, img1_cu, φ_cu, η)
-    CUDA.synchronize()
-    @test norm(Array(output_r) - logsumexp_value_r) ≈ 0 atol = 1e-10
-    @test norm(Array(output_c) - logsumexp_value_c) ≈ 0 atol = 1e-10
-
-    @cuda threads = 256 blocks = 2 warp_logsumexp_ct!(output_r, img1_cu, img2_cu, ψ_cu, η)
-    @cuda threads = 256 blocks = 2 warp_logsumexp_ct!(output_c, img2_cu, img1_cu, φ_cu, η)
-    CUDA.synchronize()
-    @test norm(Array(output_r) - logsumexp_value_r) ≈ 0 atol = 1e-10
-    @test norm(Array(output_c) - logsumexp_value_c) ≈ 0 atol = 1e-10
-
-    @cuda threads = 256 blocks = 32 residual!(output_r, img1_cu, img2_cu, φ_cu, ψ_cu, η)
-    @cuda threads = 256 blocks = 32 residual!(output_c, img2_cu, img1_cu, ψ_cu, φ_cu, η)
-    CUDA.synchronize()
-    marginal_r = sum(exp.(-W ./ η .+ φ .+ ψ'), dims=2)
-    marginal_c = sum(exp.(-W ./ η .+ φ .+ ψ')', dims=2)
-    residual_r = ones(N) / N - marginal_r
-    residual_c = ones(N) / N - marginal_c
-    @test norm(residual_r - Array(output_r)) ≈ 0 atol = 1e-10
-    @test norm(residual_c - Array(output_c)) ≈ 0 atol = 1e-10
-    # marginal_c
+function extragradient_color_transfer(f1::String, f2::String, out_f1::String, out_f2::String, η::Float64, resolution::Int, maxiter::Int)
+    img1, dims1 = load_rgb(f1; cuda=true, size=(resolution, resolution))
+    img2, dims2 = load_rgb(f2; cuda=true, size=(resolution, resolution))
+    _, img1_new, img2_new = extragradient_color_transfer(img1, img2, η, maxiter)
+    save_image(out_f1, img1_new, dims1)
+    save_image(out_f2, img2_new, dims2)
 end

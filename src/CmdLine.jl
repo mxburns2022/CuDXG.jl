@@ -10,6 +10,7 @@ solvers = Dict(
 )
 settings = ArgParseSettings(prog="eotfom")
 @add_arg_table! settings begin
+
     "--algorithm", "-a"
     help = "Algorithm to solve the DOT instance. Options are: $(join(keys(solvers), ", "))"
     range_tester = x -> x in keys(solvers)

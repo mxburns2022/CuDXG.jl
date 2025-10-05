@@ -83,6 +83,29 @@ function softmax(x::AbstractArray{T}; normalize_values=true, dims=[], norm_dims=
     end
 end
 
+function polyroot(a, b, c, γ)
+    # Basic Newton's method routine to find the root of a polynomial
+    dx = 1.
+    if γ == 2
+        return (-b + sqrt(b^2 - 4 * a * c)) / 2a
+    end
+    if γ == 1
+        return -c / (a + b)
+    end
+    x = 1.0
+    fx = a * x^(γ) + b * x + c
+    niter_inner = 1
+    tol = log2(a) - 20
+    while log2(fx) > tol
+        fx = a * x^(γ) + b * x + c
+        dx = a * γ * x^(γ - 1) + b
+        x = x - fx / dx
+        # println(x, fx)
+        niter_inner += 1
+    end
+    return x
+end
+
 function neg_entropy(x::TA; dims=[]) where TA
     return sum(map(y -> if y > 1e-30
                 y * log(y)
