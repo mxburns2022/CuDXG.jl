@@ -35,9 +35,9 @@ function accelerated_sinkhorn(r::AbstractArray{R},
     end
     θ = 1
     function residual!(u, v)
-        normv = sum(sofitermax(K .+ u .+ v'; normalize_values=true))
-        residual_r .= sofitermax(K .+ u .+ v'; dims=2, normalize_values=true) ./ normv - r
-        residual_c .= sofitermax(K .+ u .+ v'; dims=1, normalize_values=true)' ./ normv - c
+        normv = sum(softmax(K .+ u .+ v'; normalize_values=true))
+        residual_r .= softmax(K .+ u .+ v'; dims=2, normalize_values=true) ./ normv - r
+        residual_c .= softmax(K .+ u .+ v'; dims=1, normalize_values=true)' ./ normv - c
     end
     function dual_value(u, v)
         return -sum(r'u) - sum(c'v) + sum(logsumexp(K .+ u .+ v'))

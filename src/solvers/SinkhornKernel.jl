@@ -39,14 +39,11 @@ function residual!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
     return
 end
 
-@inline function rgb_distance(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b)
-    return (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-end
 
 @inline function eot_exponent(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b, φi, ψj, η)
     return -(rgb_distance(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b)) / reg + ψj + φi + η
 end
-function naive_findmaxindex_ct!(output::CuDeviceVector{Int}, img1::CuDeviceMatrix{T},
+function naive_findmaxindex_ct!(output_img::CuDeviceMatrix{T}, img1::CuDeviceMatrix{T},
     img2::CuDeviceMatrix{T}, φ::CuDeviceVector{T}, ψ::CuDeviceVector{T}, reg::T) where T
     tid_x = threadIdx().x + (blockIdx().x - 1) * blockDim().x
     N = size(img1, 2)
@@ -57,21 +54,24 @@ function naive_findmaxindex_ct!(output::CuDeviceVector{Int}, img1::CuDeviceMatri
     pix1g = img1[2, tid_x]
     pix1b = img1[3, tid_x]
     φi = φ[tid_x]
-    maxval = -Inf
-    maxind = Int(-1)
+    avgr = 0.0
+    avgg = 0.0
+    avgb = 0.0
+    probsum = 0.0
     for i in 1:N
         pix2r = img2[1, i]
         pix2g = img2[2, i]
         pix2b = img2[3, i]
         l2dist = rgb_distance(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b)
-        value = -(l2dist) / reg + φi + ψ[i]
-        if value > maxval
-            maxval = value
-            maxind = i
-        end
+        prob = exp(-(l2dist) / reg + φi + ψ[i])
+        probsum += prob
+        avgr += img2[1, i] * prob
+        avgg += img2[2, i] * prob
+        avgb += img2[3, i] * prob
     end
-    output[tid_x] = maxind
-
+    output_img[1, tid_x] = avgr * N
+    output_img[2, tid_x] = avgg * N
+    output_img[3, tid_x] = avgb * N
 
     return
 end
@@ -104,12 +104,7 @@ function warp_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
             maxval = max(value, maxval)
         end
         maxval = CUDA.reduce_warp(max, maxval)
-        if local_id == 0
-            output[tid_x] = maxval
-        end
-        sync_warp()
-        maxval = output[tid_x]
-
+        maxval = shfl_sync(CUDA.FULL_MASK, maxval, 1)
         local_acc = 0.0
         for i in 1:step:N
             if i + local_id > N
@@ -252,6 +247,7 @@ function block_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
     # tid_x += nwarps
     return
 end
+
 function test_logsumexp_kernel()
     N = 100
     img1 = rand(3, N)
@@ -309,7 +305,7 @@ function test_logsumexp_kernel()
     # marginal_c
 end
 
-function sinkhorn_kernel(img1::CuArray{T}, img2::CuArray{T}, η::T, maxiter::Int=10000, frequency::Int=1) where T<:Real
+function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, η::T, maxiter::Int=10000, frequency::Int=100) where T<:Real
     N = size(img1, 2)
     φ = CUDA.zeros(T, N)
     ψ = CUDA.zeros(T, N)
@@ -331,13 +327,13 @@ function sinkhorn_kernel(img1::CuArray{T}, img2::CuArray{T}, η::T, maxiter::Int
             println("$(residual_c) $(residual_r) $(objective)")
         end
     end
-    index_set_r = CUDA.zeros(Int, N)
-    index_set_c = CUDA.zeros(Int, N)
+    output_img1 = CUDA.zeros(T, 3, N)
+    output_img2 = CUDA.zeros(T, 3, N)
     naive_blocks = div(N, threads, RoundUp)
-    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(index_set_r, img1, img2, φ, ψ, η)
-    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(index_set_c, img2, img1, ψ, φ, η)
+    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(output_img1, img1, img2, φ, ψ, η)
+    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(output_img2, img2, img1, ψ, φ, η)
 
-    return φ, ψ, Array(index_set_r), Array(index_set_c)
+    return φ, ψ, Array(output_img1), Array(output_img2)
 
 end
 function test_sinkhorn()
@@ -346,6 +342,13 @@ function test_sinkhorn()
     img2 = CUDA.rand(Float64, 3, N)
     η = 1e-4
     maxiter = 4
-    sinkhorn_color_transfer(img1, img2, η, maxiter, 1)
+    sinkhorn_color_transfer(img1, img2, η, maxiter, 100)
 end
 
+function sinkhorn_color_transfer(f1::String, f2::String, out_f1::String, out_f2::String, η::Float64, resolution::Tuple{Int,Int}, maxiter::Int, frequency::Int)
+    img1, dims1 = load_rgb(f1; cuda=true, resolution=resolution)
+    img2, dims2 = load_rgb(f2; cuda=true, resolution=resolution)
+    _, _, img1_new, img2_new = sinkhorn_color_transfer(img1, img2, η, maxiter, frequency)
+    save_image(out_f1, img1_new, dims1)
+    save_image(out_f2, img2_new, dims2)
+end

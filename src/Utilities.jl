@@ -47,8 +47,8 @@ end
 
 @inline
 function dual_gradient!(output::TA, x::TA, prob::EOTProblem) where TA
-    grad_cache1 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=2)
-    grad_cache2 = sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=1)'
+    grad_cache1 = softmax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=2)
+    grad_cache2 = softmax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]', dims=1)'
     output .= vcat(grad_cache1, grad_cache2)
     output .-= prob.b
 end
@@ -58,10 +58,12 @@ end
 function φ(x, prob::EOTProblem)
     return sum(logsumexp(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')) - dot(prob.b, x)
 end
-
+function φ(u::TA, v::TA, r::TA, c::TA, W::TM, η::R) where {TA,TM,R}
+    return -sum(logsumexp(-(W .- u .- v') / η)) + dot(r, u) + dot(c, v)
+end
 
 function get_p(x, prob::EOTProblem)
-    return sofitermax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')
+    return softmax(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')
 end
 
 function read_args_json(fpath::String)
@@ -69,7 +71,7 @@ function read_args_json(fpath::String)
     settings = JSON3.read(json_string, EOTArgs)
     return settings
 end
-function sofitermax(x::AbstractArray{T}; normalize_values=true, dims=[], norm_dims=Nothing) where T<:Real
+function softmax(x::AbstractArray{T}; normalize_values=true, dims=[], norm_dims=Nothing) where T<:Real
     if norm_dims == Nothing
         norm_dims = [1:ndims(x)...]
     end
@@ -81,6 +83,29 @@ function sofitermax(x::AbstractArray{T}; normalize_values=true, dims=[], norm_di
         v1 = sum(exp.(x .- maxx), dims=dims)
         return v1 ./ sum(v1, dims=norm_dims)
     end
+end
+
+function polyroot(a, b, c, γ)
+    # Basic Newton's method routine to find the root of a polynomial
+    dx = 1.
+    if γ == 2
+        return (-b + sqrt(b^2 - 4 * a * c)) / 2a
+    end
+    if γ == 1
+        return -c / (a + b)
+    end
+    x = 1.0
+    fx = a * x^(γ) + b * x + c
+    niter_inner = 1
+    tol = log2(a) - 20
+    while log2(fx) > tol
+        fx = a * x^(γ) + b * x + c
+        dx = a * γ * x^(γ - 1) + b
+        x = x - fx / dx
+        # println(x, fx)
+        niter_inner += 1
+    end
+    return x
 end
 
 function neg_entropy(x::TA; dims=[]) where TA
