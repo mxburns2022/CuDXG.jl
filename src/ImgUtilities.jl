@@ -25,9 +25,8 @@ function restore_image(img::AbstractArray{T}, original_shape::Tuple) where T<:Re
     return reshape(img, (channels, w, h))
 end
 
-function load_rgb(filepath::String; cuda::Bool=false, size::Tuple=())
-    img = Float64.(channelview(imresize(load(filepath), size, ratio=1.0)))
-
+function load_rgb(filepath::String; cuda::Bool=false, resolution::Tuple=())
+    img = Float64.(channelview(imresize(load(filepath), resolution, ratio=1.0)))
 
     img, original_dims = flatten_image(img)
     if cuda

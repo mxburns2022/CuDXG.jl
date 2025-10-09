@@ -104,12 +104,7 @@ function warp_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
             maxval = max(value, maxval)
         end
         maxval = CUDA.reduce_warp(max, maxval)
-        if local_id == 0
-            output[tid_x] = maxval
-        end
-        sync_warp()
-        maxval = output[tid_x]
-
+        maxval = shfl_sync(CUDA.FULL_MASK, maxval, 1)
         local_acc = 0.0
         for i in 1:step:N
             if i + local_id > N
@@ -310,7 +305,7 @@ function test_logsumexp_kernel()
     # marginal_c
 end
 
-function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, η::T, maxiter::Int=10000, frequency::Int=1) where T<:Real
+function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, η::T, maxiter::Int=10000, frequency::Int=100) where T<:Real
     N = size(img1, 2)
     φ = CUDA.zeros(T, N)
     ψ = CUDA.zeros(T, N)
@@ -347,13 +342,13 @@ function test_sinkhorn()
     img2 = CUDA.rand(Float64, 3, N)
     η = 1e-4
     maxiter = 4
-    sinkhorn_color_transfer(img1, img2, η, maxiter, 1)
+    sinkhorn_color_transfer(img1, img2, η, maxiter, 100)
 end
 
-function sinkhorn_color_transfer(f1::String, f2::String, out_f1::String, out_f2::String, η::Float64, resolution::Int, maxiter::Int)
-    img1, dims1 = load_rgb(f1; cuda=true, size=(resolution, resolution))
-    img2, dims2 = load_rgb(f2; cuda=true, size=(resolution, resolution))
-    _, _, img1_new, img2_new = sinkhorn_color_transfer(img1, img2, η, maxiter)
+function sinkhorn_color_transfer(f1::String, f2::String, out_f1::String, out_f2::String, η::Float64, resolution::Tuple{Int,Int}, maxiter::Int, frequency::Int)
+    img1, dims1 = load_rgb(f1; cuda=true, resolution=resolution)
+    img2, dims2 = load_rgb(f2; cuda=true, resolution=resolution)
+    _, _, img1_new, img2_new = sinkhorn_color_transfer(img1, img2, η, maxiter, frequency)
     save_image(out_f1, img1_new, dims1)
     save_image(out_f2, img2_new, dims2)
 end

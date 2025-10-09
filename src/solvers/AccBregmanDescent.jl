@@ -23,23 +23,25 @@ function accelerated_bregman_descent(
     γ⁺ = copy(μ⁺)
     γ⁻ = copy(μ⁺)
     ημ = 1.0 ./ (c .+ args.C3 / n)
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    time_start = time_ns()
     function infeas(μ⁺, μ⁻)
         maximum!(maxvals, -(W * 0.5 .+ μ⁺' .- (1. .- μ⁺)') ./ ηp)
         sum!(sumvals, exp.(-(W * 0.5 .+ μ⁺' .- (1. .- μ⁺)') ./ ηp .- maxvals))
         sum!(residual_storage', exp.(-(W * 0.5 .+ μ⁺' .- (1. .- μ⁺)') ./ ηp .- maxvals .- log.(sumvals) .+ log.(r)))
         # return 
     end
-    function dual_value(μ⁺, μ⁻)
+    function dual_value(μ⁺)
         return dot(c, μ⁺ - (1. .- μ⁺)) + ηp * dot(r, logsumexp(-(W * 0.5 .+ μ⁺' .- (1. .- μ⁺)') ./ ηp, 2))
     end
     function bregman(μ⁺, μ⁻, ν⁺, ν⁻)
         return dot(μ⁺ ./ ημ, log.(μ⁺ ./ ν⁺)) + dot((1. .- μ⁺) ./ ημ, log.((1. .- μ⁺) ./ (1. .- ν⁺)))
     end
     function linearization(μ⁺, μ⁻, ν⁺, ν⁻, ∇dν)
-        dual_value(μ⁺, μ⁻) - dual_value(ν⁺, ν⁻) - dot(∇dν, μ⁺ - ν⁺ - (μ⁻ - ν⁻))
+        dual_value(μ⁺) - dual_value(ν⁺) - dot(∇dν, μ⁺ - ν⁺ - (μ⁻ - ν⁻))
     end
     ρ = 2
-    γ = 2.
+    γ = 1.5
     Gmin = exp(-args.B) / 10
     G = 1
     function ΔBProject!(μ⁺, μ⁻)
@@ -55,13 +57,22 @@ function accelerated_bregman_descent(
         μ⁺ .= μ⁺adjust ./ normv
     end
     θ = 1
-    for k in 1:args.tmax
+    for k in 1:args.itermax
+        elapsed_time = (time_ns() - time_start) / 1e9
+        if elapsed_time > args.tmax
+            break
+        end
         if (k - 1) % frequency == 0
             p = softmax(-(W * 0.5 .+ μ⁺' .- (1 .- μ⁺)') ./ ηp, norm_dims=2)
             pr = r .* p
             feas = norm(sum(pr, dims=1)' - c, 1)
             obj = dot(round(pr, r, c), _W)
-            @printf "%d,%.14e,%.14e,-1,dual_extrap\n" k feas obj
+            pobj = primalv(p, _W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺, μ⁻, _W, W, W∞, ηp, r, c)
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,dual_extrap\n" elapsed_time i feas obj pobj dobj
+            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
+                break
+            end
         end
         Mₖ = max(G / ρ, Gmin)
         Gₖ = Mₖ
