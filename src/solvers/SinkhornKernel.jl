@@ -6,6 +6,68 @@ using BenchmarkTools
 
 
 
+function residual_opt!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
+    img2::CuDeviceMatrix{T}, marginal::CuDeviceVector{T}, φ::CuDeviceVector{T}, ψ::CuDeviceVector{T}, reg::T) where T
+    step = warpsize()
+    nwarps = (gridDim().x * blockDim().x) ÷ step
+    tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
+    N = size(img1, 2)
+    N_outer = Int(ceil(N / nwarps))
+    local_id = (threadIdx().x - 1) % step
+    invreg = -one(T) / reg
+    Ntiles = (N) ÷ step
+    for _ in 1:N_outer
+        local_acc = 0.0
+        @inbounds begin
+            pix1r = img1[1, tid_x]
+            pix1g = img1[2, tid_x]
+            pix1b = img1[3, tid_x]
+            φi = φ[tid_x]
+        end
+        for tile in 0:Ntiles-1
+            j = tile * warpsize() + 1
+            @inbounds begin
+                pix2r = img2[1, j+local_id]
+                pix2g = img2[2, j+local_id]
+                pix2b = img2[3, j+local_id]
+                muval = ψ[j+local_id]
+                dr = (pix1r - pix2r)
+                dg = (pix1g - pix2g)
+                db = (pix1b - pix2b)
+                l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                value = muladd(l2dist, invreg, φi) + ψ[j+local_id]
+            end
+
+            local_acc += exp(value)
+        end
+        if (Ntiles) * warpsize() + local_id < N
+            j = (Ntiles) * warpsize() + 1
+            @inbounds begin
+                pix2r = img2[1, j+local_id]
+                pix2g = img2[2, j+local_id]
+                pix2b = img2[3, j+local_id]
+                muval = ψ[j+local_id]
+                dr = (pix1r - pix2r)
+                dg = (pix1g - pix2g)
+                db = (pix1b - pix2b)
+                l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                value = muladd(l2dist, invreg, φi) + ψ[j+local_id]
+            end
+
+            local_acc += exp(value)
+        end
+        local_acc = CUDA.reduce_warp(+, local_acc)
+        if local_id == 0
+            @inbounds begin
+                output[tid_x] = marginal[tid_x] - local_acc
+            end
+        end
+        tid_x += nwarps
+    end
+    return
+end
+
+
 function residual!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
     img2::CuDeviceMatrix{T}, φ::CuDeviceVector{T}, ψ::CuDeviceVector{T}, reg::T) where T
     step = warpsize()
@@ -31,10 +93,9 @@ function residual!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
         value = -(l2dist) / reg + φi + ψ[i+local_id]
         local_acc += exp(value)
     end
-    local_acc2 = CUDA.reduce_warp(+, local_acc)
-    sync_warp()
+    local_acc = CUDA.reduce_warp(+, local_acc)
     if local_id == 0
-        output[tid_x] = 1 / N - local_acc2
+        output[tid_x] = 1 / N - local_acc
     end
     return
 end
@@ -69,9 +130,9 @@ function naive_findmaxindex_ct!(output_img::CuDeviceMatrix{T}, img1::CuDeviceMat
         avgg += img2[2, i] * prob
         avgb += img2[3, i] * prob
     end
-    output_img[1, tid_x] = avgr * N
-    output_img[2, tid_x] = avgg * N
-    output_img[3, tid_x] = avgb * N
+    output_img[1, tid_x] = avgr / probsum
+    output_img[2, tid_x] = avgg / probsum
+    output_img[3, tid_x] = avgb / probsum
 
     return
 end
@@ -127,6 +188,99 @@ function warp_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
     return
 end
 
+function warp_logsumexp_ct_opt!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
+    img2::CuDeviceMatrix{T}, marginal::CuDeviceVector{T}, ψ::CuDeviceVector{T}, reg::T) where T
+    step = warpsize()
+    nwarps = (gridDim().x * blockDim().x) ÷ step
+    tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
+    N = size(img1, 2)
+    N_outer = Int(ceil(N / nwarps))
+    local_id = (threadIdx().x - 1) % step
+    invreg = -one(T) / reg
+    Ntiles = (N) ÷ step
+    for _ in 1:N_outer
+        if tid_x > N
+            return
+        end
+        pix1r = img1[1, tid_x]
+        pix1g = img1[2, tid_x]
+        pix1b = img1[3, tid_x]
+        maxval = -Inf
+
+        for tile in 0:Ntiles-1
+            j = tile * warpsize() + 1
+            @inbounds begin
+                pix2r = img2[1, j+local_id]
+                pix2g = img2[2, j+local_id]
+                pix2b = img2[3, j+local_id]
+                muval = ψ[j+local_id]
+                dr = (pix1r - pix2r)
+                dg = (pix1g - pix2g)
+                db = (pix1b - pix2b)
+                l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                value = muladd(l2dist, invreg, muval)
+            end
+            maxval = max(value, maxval)
+        end
+        if (Ntiles) * warpsize() + local_id < N
+            j = (Ntiles) * warpsize() + 1
+            @inbounds begin
+                pix2r = img2[1, j+local_id]
+                pix2g = img2[2, j+local_id]
+                pix2b = img2[3, j+local_id]
+                muval = ψ[j+local_id]
+                dr = (pix1r - pix2r)
+                dg = (pix1g - pix2g)
+                db = (pix1b - pix2b)
+                l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                value = muladd(l2dist, invreg, muval)
+            end
+            maxval = max(value, maxval)
+        end
+        maxval = CUDA.reduce_warp(max, maxval)
+        maxval = CUDA.shfl_sync(CUDA.FULL_MASK, maxval, 1)
+
+        local_acc = 0.0
+        for tile in 0:Ntiles-1
+            j = tile * warpsize() + 1
+            @inbounds begin
+                pix2r = img2[1, j+local_id]
+                pix2g = img2[2, j+local_id]
+                pix2b = img2[3, j+local_id]
+                muval = ψ[j+local_id]
+                dr = (pix1r - pix2r)
+                dg = (pix1g - pix2g)
+                db = (pix1b - pix2b)
+                l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                value = muladd(l2dist, invreg, muval)
+            end
+
+            local_acc += exp(value - maxval)
+        end
+        if (Ntiles) * warpsize() + local_id < N
+            j = (Ntiles) * warpsize() + 1
+            @inbounds begin
+                pix2r = img2[1, j+local_id]
+                pix2g = img2[2, j+local_id]
+                pix2b = img2[3, j+local_id]
+                muval = ψ[j+local_id]
+                dr = (pix1r - pix2r)
+                dg = (pix1g - pix2g)
+                db = (pix1b - pix2b)
+                l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                value = muladd(l2dist, invreg, muval)
+            end
+
+            local_acc += exp(value - maxval)
+        end
+        local_acc = CUDA.reduce_warp(+, local_acc)
+        if local_id == 0
+            output[tid_x] = log(marginal[tid_x]) - (log(local_acc) + maxval)
+        end
+        tid_x += nwarps
+    end
+    return
+end
 function naive_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
     img2::CuDeviceMatrix{T}, ψ::CuDeviceVector{T}, reg::T) where T
     tid_x = threadIdx().x + (blockIdx().x - 1) * blockDim().x
@@ -293,8 +447,8 @@ function test_logsumexp_kernel()
     @test norm(Array(output_r) - logsumexp_value_r) ≈ 0 atol = 1e-10
     @test norm(Array(output_c) - logsumexp_value_c) ≈ 0 atol = 1e-10
 
-    @cuda threads = 256 blocks = 32 residual!(output_r, img1_cu, img2_cu, φ_cu, ψ_cu, η)
-    @cuda threads = 256 blocks = 32 residual!(output_c, img2_cu, img1_cu, ψ_cu, φ_cu, η)
+    @cuda threads = 256 blocks = 32 residual_opt!(output_r, img1_cu, img2_cu, φ_cu, ψ_cu, η)
+    @cuda threads = 256 blocks = 32 residual_opt!(output_c, img2_cu, img1_cu, ψ_cu, φ_cu, η)
     CUDA.synchronize()
     marginal_r = sum(exp.(-W ./ η .+ φ .+ ψ'), dims=2)
     marginal_c = sum(exp.(-W ./ η .+ φ .+ ψ')', dims=2)
@@ -305,26 +459,29 @@ function test_logsumexp_kernel()
     # marginal_c
 end
 
-function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, η::T, maxiter::Int=10000, frequency::Int=100) where T<:Real
+function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::CuArray{T}, marginal2::CuArray{T}, args::EOTArgs, frequency::Int=100) where T<:Real
     N = size(img1, 2)
     φ = CUDA.zeros(T, N)
     ψ = CUDA.zeros(T, N)
     residual_cache = CUDA.zeros(T, N)
     threads = 256
     blocks = div(N, div(threads, 32, RoundDown), RoundUp)
-    for i in 1:maxiter
-        @cuda threads = threads blocks = blocks warp_logsumexp_ct!(φ, img1, img2, ψ, η)
-        @cuda threads = threads blocks = blocks warp_logsumexp_ct!(ψ, img2, img1, φ, η)
+    time_start = time_ns()
+    η = args.eta_p
+    for i in 1:args.itermax
+        elapsed_time = (time_ns() - time_start) / 1e9
+        if elapsed_time > args.tmax
+            break
+        end
+        @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(φ, img1, img2, marginal1, ψ, η)
+        @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(ψ, img2, img1, marginal2, φ, η)
         CUDA.synchronize()
-        if (i - 1) % frequency == 0
-            @cuda threads = threads blocks = blocks residual!(residual_cache, img1, img2, φ, ψ, η)
+        if args.verbose && (i - 1) % frequency == 0
+            @cuda threads = threads blocks = blocks residual_opt!(residual_cache, img1, img2, marginal1, φ, ψ, η)
             CUDA.synchronize()
-            residual_r = sum(residual_cache)
-            @cuda threads = threads blocks = blocks residual!(residual_cache, img2, img1, ψ, φ, η)
-            CUDA.synchronize()
-            residual_c = sum(residual_cache)
-            objective = sum(ψ) / N + sum(φ) / N
-            println("$(residual_c) $(residual_r) $(objective)")
+            residual_r = norm(residual_cache, 1)
+            objective = dot(ψ, marginal2) + dot(φ, marginal1)
+            @printf "%.6e,%d,%.14e,%.14e,sinkhorn_ctransfer\n" elapsed_time i residual_r objective
         end
     end
     output_img1 = CUDA.zeros(T, 3, N)
@@ -333,7 +490,7 @@ function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, η::T, maxi
     @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(output_img1, img1, img2, φ, ψ, η)
     @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(output_img2, img2, img1, ψ, φ, η)
 
-    return φ, ψ, Array(output_img1), Array(output_img2)
+    return Array(φ), Array(ψ), Array(output_img1), Array(output_img2)
 
 end
 function test_sinkhorn()
@@ -345,10 +502,43 @@ function test_sinkhorn()
     sinkhorn_color_transfer(img1, img2, η, maxiter, 100)
 end
 
-function sinkhorn_color_transfer(f1::String, f2::String, out_f1::String, out_f2::String, η::Float64, resolution::Tuple{Int,Int}, maxiter::Int, frequency::Int)
-    img1, dims1 = load_rgb(f1; cuda=true, resolution=resolution)
-    img2, dims2 = load_rgb(f2; cuda=true, resolution=resolution)
-    _, _, img1_new, img2_new = sinkhorn_color_transfer(img1, img2, η, maxiter, frequency)
+function sinkhorn_color_transfer(f1::String, f2::String, out_f1::String, out_f2::String, resolution::Tuple{Int,Int}, args::EOTArgs, frequency::Int)
+    img1, dims1, marginal1 = load_rgb(f1; cuda=true, resolution=resolution)
+    img2, dims2, marginal2 = load_rgb(f2; cuda=true, resolution=resolution)
+    _, _, img1_new, img2_new = sinkhorn_color_transfer(img1, img2, marginal1, marginal2, args, frequency)
     save_image(out_f1, img1_new, dims1)
     save_image(out_f2, img2_new, dims2)
+end
+
+
+
+function sinkhorn_euclidean(marginal1::CuArray{T}, marginal2::CuArray{T}, location1::CuArray{T}, location2::CuArray{T}, out1::String, out2::String, potentials::String, args::EOTArgs, frequency::Int) where T
+    φ, ψ, assignments1, assignments2 = sinkhorn_color_transfer(location1, location2, marginal1, marginal2, args, frequency)
+    if potentials != ""
+        open(potentials * ".row", "w") do outfile
+            for φi in φ
+                println(outfile, φi)
+            end
+        end
+        open(potentials * ".col", "w") do outfile
+            # println(outfile, "")
+            for ψj in ψ
+                println(outfile, ψj)
+            end
+        end
+    end
+    if out1 != ""
+        open(out1, "w") do outfile
+            for index in eachindex(assignments1)
+                println(outfile, "$(assignments1),$(index)")
+            end
+        end
+    end
+    if out2 != ""
+        open(out2, "w") do outfile
+            for index in eachindex(assignments2)
+                println(outfile, "$(assignments2),$(index)")
+            end
+        end
+    end
 end

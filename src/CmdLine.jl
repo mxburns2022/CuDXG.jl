@@ -49,6 +49,15 @@ end
     "file2"
     help = "Path to target DOTMark-formatted file (col marginal) (TODO: Add support for more input types)"
     required = true
+    "--output1"
+    help = "Output path for assignment 1"
+    default = ""
+    "--output2"
+    help = "Output path for assignment 2"
+    default = ""
+    "--potential-out"
+    help = "Output path for dual potentials. Order is (1) Simplex dual (if using extragradient), (2) Potential for Row Marginal, (3) Potential for Column Marginal>"
+    default = ""
 end
 @add_arg_table! settings["ctransfer"] begin
     "--algorithm", "-a"
@@ -125,15 +134,34 @@ function run_dot(parsed_args)
     # mix it with a little bit of the uniform distribution for stability
     r = normalize(marginal1 .+ 1e-6, 1)
     c = normalize(marginal2 .+ 1e-6, 1)
-    W = get_euclidean_distance(h, w)
-    W∞ = norm(W, Inf)
-    # args.eta_p /= W∞
-    # args.epsilon /= W∞
-    W ./= W∞
-    if parsed_args["cuda"]
-        r, c, W = map(CuArray, [r, c, W])
+
+    if h * w < 2#^16
+        W = get_euclidean_distance(h, w)
+        W∞ = norm(W, Inf)
+        # args.eta_p /= W∞
+        # args.epsilon /= W∞
+        W ./= W∞
+        if parsed_args["cuda"]
+            r, c, W = map(CuArray, [r, c, W])
+        end
+        solvers[parsed_args["algorithm"]](r, c, W, args, parsed_args["frequency"])
+    else
+        r = CuArray(r)
+        c = CuArray(c)
+        locations = zeros(Float64, 3, h * w)
+        for i in 1:h*w
+            locations[1, i] = (i - 1) ÷ w
+            locations[2, i] = (i - 1) % w
+        end
+        W = (locations[1, :] .- locations[1, :]') .^ 2 + (locations[2, :] .- locations[2, :]') .^ 2
+        println(W)
+        locations = CuArray(locations)
+        if parsed_args["algorithm"] == "sinkhorn"
+            sinkhorn_euclidean(r, c, locations, locations, parsed_args["output1"], parsed_args["output2"], parsed_args["potential-out"], args, parsed_args["frequency"])
+        elseif parsed_args["algorithm"] == "dual_extragradient"
+            extragradient_euclidean(r, c, locations, locations, parsed_args["output1"], parsed_args["output2"], parsed_args["potential-out"], args, parsed_args["frequency"])
+        end
     end
-    solvers[solver](r, c, W, args, parsed_args["frequency"])
 end
 
 function run_ctransfer(parsed_args)
@@ -142,7 +170,7 @@ function run_ctransfer(parsed_args)
     if parsed_args["algorithm"] == "dual_extragradient"
         extragradient_color_transfer(parsed_args["file1"], parsed_args["file2"], parsed_args["output1"], parsed_args["output2"], size, args, parsed_args["frequency"])
     elseif parsed_args["algorithm"] == "sinkhorn"
-        sinkhorn_color_transfer(parsed_args["file1"], parsed_args["file2"], parsed_args["output1"], parsed_args["output2"], args.eta_p, size, args.itermax, parsed_args["frequency"])
+        sinkhorn_color_transfer(parsed_args["file1"], parsed_args["file2"], parsed_args["output1"], parsed_args["output2"], size, args, parsed_args["frequency"])
     end
 end
 

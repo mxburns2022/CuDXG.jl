@@ -4,6 +4,7 @@ using JSON3
 using IterTools
 using StructTypes
 using ArgParse
+# using DelimitedFiles
 
 @kwdef struct EOTProblem{TA,TM,R}
     η::R
@@ -18,7 +19,7 @@ end
     eta_mu::R = 0.0
     C1::R = 1.0
     C2::R = 1.0
-    C3::R = 1e-3
+    C3::R = 1e-2
     B::R = 1.0
     epsilon::R = 1e-4
     itermax::Int = 10_000
@@ -107,7 +108,13 @@ function polyroot(a, b, c, γ)
     end
     return x
 end
-
+function generate_random_ot(N, rng)
+    r = normalize(rand(rng, N), 1)
+    c = normalize(rand(rng, N), 1)
+    W = abs.(randn(rng, N, N))
+    optimum = emd2(r, c, W)
+    return r, c, W, optimum
+end
 function neg_entropy(x::TA; dims=[]) where TA
     return sum(map(y -> if y > 1e-30
                 y * log(y)
@@ -139,6 +146,3 @@ function read_dotmark_data(fpath::String)
     marginal = reshape(input_data, N) / sum(input_data)
     return marginal, h, w, N
 end
-
-
-
