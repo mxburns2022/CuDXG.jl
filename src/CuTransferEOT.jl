@@ -13,6 +13,7 @@ include("solvers/APDAMD.jl")
 include("solvers/APDAGD.jl")
 include("solvers/Greenkhorn.jl")
 include("solvers/AccSinkhorn.jl")
+include("solvers/HPD.jl")
 include("CmdLine.jl")
 include("solvers/ExtragradientBarycenter.jl")
 export read_dotmark_data, get_euclidean_distance

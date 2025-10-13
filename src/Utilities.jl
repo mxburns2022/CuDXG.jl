@@ -60,7 +60,7 @@ function φ(x, prob::EOTProblem)
     return sum(logsumexp(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')) - dot(prob.b, x)
 end
 function φ(u::TA, v::TA, r::TA, c::TA, W::TM, η::R) where {TA,TM,R}
-    return -sum(logsumexp(-(W .- u .- v') / η)) + dot(r, u) + dot(c, v)
+    return -η * sum(logsumexp(-(W) / η .- u .- v')) - η * dot(r, u) - η * dot(c, v)
 end
 
 function get_p(x, prob::EOTProblem)

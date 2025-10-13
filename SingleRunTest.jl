@@ -24,4 +24,4 @@ arglist = [
     "--output2", "eg_assignment2.txt",
     "--potential-out", "potentials2.txt",
 ]
-run_from_arguments(arglist)
+run_from_arguments(ARGS)

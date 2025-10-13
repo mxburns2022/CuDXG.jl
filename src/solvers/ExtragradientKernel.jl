@@ -19,6 +19,7 @@ function residual_spp_c!(output::CuDeviceVector{T}, cost_output::CuDeviceVector{
     for _ in 1:N_outer
         local_acc = 0.0
         cost_acc = 0.0
+
         @inbounds begin
             pix1r = img2[1, tid_x]
             pix1g = img2[2, tid_x]
@@ -61,6 +62,7 @@ function residual_spp_c!(output::CuDeviceVector{T}, cost_output::CuDeviceVector{
             cost_acc += exp(value) * l2dist * marginalv
         end
         local_acc = CUDA.reduce_warp(+, local_acc)
+        cost_acc = CUDA.reduce_warp(+, cost_acc)
         if local_id == 0
             @inbounds begin
                 output[tid_x] = local_acc
@@ -588,12 +590,14 @@ function warp_logsumexp_spp_ct_opt!(output::CuDeviceVector{T}, img1::CuDeviceMat
 end
 
 
-function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::CuArray{T}, marginal2::CuArray{T}, args::EOTArgs, frequency::Int=100, normalize_cost::Bool=true) where T<:Real
+function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::CuArray{T}, marginal2::CuArray{T}, args::EOTArgs, frequency::Int=100, normalize_cost::Bool=false) where T<:Real
     N = size(img1, 2)
     μ⁺ = T(0.5) * CUDA.ones(T, N)
     μ⁻ = copy(μ⁺)
     μt⁺ = copy(μ⁺)
     μt⁻ = copy(μ⁺)
+    μa⁺ = copy(μ⁺)
+    μa⁻ = copy(μ⁺)
     ν⁺ = copy(μ⁺)
     ν⁻ = copy(μ⁺)
     νt⁺ = copy(μ⁺)
@@ -606,7 +610,6 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
     @cuda threads = threads blocks = warp_blocks max_logsumexp_spp_ct!(sumvals, img1, img2)
     CUDA.synchronize()
     W∞ = maximum(sumvals)
-    println(W∞)
     if normalize_cost
         η = T(args.eta_p / 2 / W∞)
     else
@@ -624,6 +627,8 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
         @cuda threads = threads blocks = warp_blocks residual_spp_c!(residual_cache, cost_cache, img1, img2, marginal1, μ⁺, sumvals, η, st, W∞)
         CUDA.synchronize()
     end
+    hr = sum(neg_entropy(marginal1))
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
     for i in 1:args.itermax
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
@@ -633,19 +638,29 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
             @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, img1, img2, ν⁺, η, st, W∞)
             @cuda threads = threads blocks = warp_blocks residual_spp_c!(residual_cache, cost_cache, img1, img2, marginal1, ν⁺, sumvals, η, st, W∞)
             CUDA.synchronize()
-            residual_c = sum(abs.(residual_cache - marginal2))
-            objective = sum(cost_cache)
+            primal_value = η * dot(marginal1, sumvals) + dot(marginal2, 2ν⁺ .- 1) + hr
+            residual_value = sum(abs.(residual_cache - marginal2))
+            objective = sum(cost_cache) / W∞
+            @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, img1, img2, μ⁺, η, 1.0, W∞)
 
-            @printf "%.6e,%d,%.14e,%.14e,extragrad_dual_ctransfer\n" elapsed_time i residual_c objective
+            dual_value = η * dot(marginal1, sumvals) + dot(marginal2, 2μ⁺ .- 1) + hr
+            # @cuda threads = threads blocks = warp_blocks residual_spp_c!(residual_cache, cost_cache, img1, img2, marginal1, μ⁺, sumvals, η, 1.0, W∞)
+            CUDA.synchronize()
+            # objective_dual = sum(cost_cache) / W∞
+
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragrad_dual_ctransfer\n" elapsed_time i residual_value objective primal_value dual_value
+            if primal_value - dual_value < args.epsilon / 6 && 1-st < args.epsilon / 6
+                break
+            end
         end
         # perform the extragradient step
         infeas(ν⁺)
-        @cuda threads = threads blocks = linear_blocks update_μ_residual_ct(μt⁺, μt⁻, μ⁺, μ⁻, marginal2, residual_cache, eta_mu, T(args.eta_mu), args.B, false)
+        @cuda threads = threads blocks = linear_blocks update_μ_residual_ct(μt⁺, μt⁻, μa⁺, μa⁻, marginal2, residual_cache, eta_mu, T(args.eta_mu), args.B, false)
         @cuda threads = threads blocks = linear_blocks update_μ_ct(νt⁺, νt⁻, ν⁺, ν⁻, μ⁺, μ⁻, η)
 
         st = (1 - η) * st + η
         infeas(νt⁺)
-        @cuda threads = threads blocks = linear_blocks update_μ_residual_ct(μ⁺, μ⁻, μ⁺, μ⁻, marginal2, residual_cache, eta_mu, T(args.eta_mu), args.B, true)
+        @cuda threads = threads blocks = linear_blocks update_μ_residual_ct(μ⁺, μ⁻, μa⁺, μa⁻, marginal2, residual_cache, eta_mu, T(args.eta_mu), args.B, true)
         @cuda threads = threads blocks = linear_blocks update_μ_ct(ν⁺, ν⁻, ν⁺, ν⁻, μt⁺, μt⁻, η)
 
         CUDA.synchronize()

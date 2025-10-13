@@ -6,18 +6,19 @@ using BenchmarkTools
 
 
 
-function residual_opt!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
-    img2::CuDeviceMatrix{T}, marginal::CuDeviceVector{T}, φ::CuDeviceVector{T}, ψ::CuDeviceVector{T}, reg::T) where T
+function residual_opt!(output::CuDeviceVector{T}, cost_output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
+    img2::CuDeviceMatrix{T}, marginal::CuDeviceVector{T}, φ::CuDeviceVector{T}, ψ::CuDeviceVector{T}, reg::T, W∞::T) where T
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
     N = size(img1, 2)
     N_outer = Int(ceil(N / nwarps))
     local_id = (threadIdx().x - 1) % step
-    invreg = -one(T) / reg
+    invreg = -one(T) / (reg * W∞)
     Ntiles = (N) ÷ step
     for _ in 1:N_outer
         local_acc = 0.0
+        cost_acc = 0.0
         @inbounds begin
             pix1r = img1[1, tid_x]
             pix1g = img1[2, tid_x]
@@ -39,6 +40,7 @@ function residual_opt!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
             end
 
             local_acc += exp(value)
+            cost_acc += exp(value) * l2dist
         end
         if (Ntiles) * warpsize() + local_id < N
             j = (Ntiles) * warpsize() + 1
@@ -55,11 +57,14 @@ function residual_opt!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
             end
 
             local_acc += exp(value)
+            cost_acc += exp(value) * l2dist
         end
         local_acc = CUDA.reduce_warp(+, local_acc)
+        cost_acc = CUDA.reduce_warp(+, cost_acc)
         if local_id == 0
             @inbounds begin
                 output[tid_x] = marginal[tid_x] - local_acc
+                cost_output[tid_x] = cost_acc
             end
         end
         tid_x += nwarps
@@ -105,7 +110,7 @@ end
     return -(rgb_distance(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b)) / reg + ψj + φi + η
 end
 function naive_findmaxindex_ct!(output_img::CuDeviceMatrix{T}, img1::CuDeviceMatrix{T},
-    img2::CuDeviceMatrix{T}, φ::CuDeviceVector{T}, ψ::CuDeviceVector{T}, reg::T) where T
+    img2::CuDeviceMatrix{T}, φ::CuDeviceVector{T}, ψ::CuDeviceVector{T}, reg::T, W∞::T) where T
     tid_x = threadIdx().x + (blockIdx().x - 1) * blockDim().x
     N = size(img1, 2)
     if tid_x > N
@@ -124,7 +129,7 @@ function naive_findmaxindex_ct!(output_img::CuDeviceMatrix{T}, img1::CuDeviceMat
         pix2g = img2[2, i]
         pix2b = img2[3, i]
         l2dist = rgb_distance(pix1r, pix1g, pix1b, pix2r, pix2g, pix2b)
-        prob = exp(-(l2dist) / reg + φi + ψ[i])
+        prob = exp(-(l2dist) / (reg*W∞) + φi + ψ[i])
         probsum += prob
         avgr += img2[1, i] * prob
         avgg += img2[2, i] * prob
@@ -189,14 +194,14 @@ function warp_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
 end
 
 function warp_logsumexp_ct_opt!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
-    img2::CuDeviceMatrix{T}, marginal::CuDeviceVector{T}, ψ::CuDeviceVector{T}, reg::T) where T
+    img2::CuDeviceMatrix{T}, marginal::CuDeviceVector{T}, ψ::CuDeviceVector{T}, reg::T, W∞::T) where T
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
     N = size(img1, 2)
     N_outer = Int(ceil(N / nwarps))
     local_id = (threadIdx().x - 1) % step
-    invreg = -one(T) / reg
+    invreg = -one(T) / (reg * W∞)
     Ntiles = (N) ÷ step
     for _ in 1:N_outer
         if tid_x > N
@@ -464,31 +469,40 @@ function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::
     φ = CUDA.zeros(T, N)
     ψ = CUDA.zeros(T, N)
     residual_cache = CUDA.zeros(T, N)
+    cost_cache = CUDA.zeros(T, N)
     threads = 256
     blocks = div(N, div(threads, 32, RoundDown), RoundUp)
     time_start = time_ns()
     η = args.eta_p
+    @cuda threads = threads blocks = blocks max_logsumexp_spp_ct!(residual_cache, img1, img2)
+    CUDA.synchronize()
+    W∞ = maximum(residual_cache)
+    println("time(s),iter,infeas,ot_objective,dual")
     for i in 1:args.itermax
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
             break
         end
-        @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(φ, img1, img2, marginal1, ψ, η)
-        @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(ψ, img2, img1, marginal2, φ, η)
+        @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(φ, img1, img2, marginal1, ψ, η, W∞)
+        @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(ψ, img2, img1, marginal2, φ, η, W∞)
         CUDA.synchronize()
         if args.verbose && (i - 1) % frequency == 0
-            @cuda threads = threads blocks = blocks residual_opt!(residual_cache, img1, img2, marginal1, φ, ψ, η)
+            @cuda threads = threads blocks = blocks residual_opt!(residual_cache,cost_cache, img1, img2, marginal1, φ, ψ, η, W∞)
             CUDA.synchronize()
             residual_r = norm(residual_cache, 1)
+            ot_objective = sum(cost_cache)
             objective = dot(ψ, marginal2) + dot(φ, marginal1)
-            @printf "%.6e,%d,%.14e,%.14e,sinkhorn_ctransfer\n" elapsed_time i residual_r objective
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,sinkhorn_kernel\n" elapsed_time i residual_r ot_objective objective
+            if residual_r <= args.epsilon / 2
+                break
+            end
         end
     end
     output_img1 = CUDA.zeros(T, 3, N)
     output_img2 = CUDA.zeros(T, 3, N)
     naive_blocks = div(N, threads, RoundUp)
-    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(output_img1, img1, img2, φ, ψ, η)
-    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(output_img2, img2, img1, ψ, φ, η)
+    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(output_img1, img1, img2, φ, ψ, η, W∞)
+    @cuda threads = threads blocks = naive_blocks naive_findmaxindex_ct!(output_img2, img2, img1, ψ, φ, η, W∞)
 
     return Array(φ), Array(ψ), Array(output_img1), Array(output_img2)
 

@@ -1,4 +1,5 @@
 using ArgParse
+using PythonOT
 solvers = Dict(
     "dual_extragradient" => extragradient_ot_dual,
     "primal_extragradient" => extragradient_ot,
@@ -6,8 +7,9 @@ solvers = Dict(
     "greenkhorn" => greenkhorn_log,
     "apdamd" => APDAMD,
     "apdagd" => APDAGD,
+    "hpd" => HPD,
     "accelerated_sinkhorn" => accelerated_sinkhorn,
-    "abdg" => accelerated_bregman_descent,
+    # "abdg" => accelerated_bregman_descent,
 )
 ctransfer_solvers = Dict(
     "dual_extragradient" => extragradient_ot_dual,
@@ -38,6 +40,9 @@ end
     default = "./test.json"
     "--cuda"
     help = "Use CUDA"
+    action = :store_true
+    "--kernel"
+    help = "Use kernels to compute OT matrices on the fly (only dual_extragradient and sinkhorn are supported)"
     action = :store_true
     "--frequency"
     help = "Printing frequency"
@@ -135,7 +140,7 @@ function run_dot(parsed_args)
     r = normalize(marginal1 .+ 1e-6, 1)
     c = normalize(marginal2 .+ 1e-6, 1)
 
-    if h * w < 2#^16
+    if !parsed_args["kernel"]
         W = get_euclidean_distance(h, w)
         W∞ = norm(W, Inf)
         # args.eta_p /= W∞
@@ -153,8 +158,6 @@ function run_dot(parsed_args)
             locations[1, i] = (i - 1) ÷ w
             locations[2, i] = (i - 1) % w
         end
-        W = (locations[1, :] .- locations[1, :]') .^ 2 + (locations[2, :] .- locations[2, :]') .^ 2
-        println(W)
         locations = CuArray(locations)
         if parsed_args["algorithm"] == "sinkhorn"
             sinkhorn_euclidean(r, c, locations, locations, parsed_args["output1"], parsed_args["output2"], parsed_args["potential-out"], args, parsed_args["frequency"])

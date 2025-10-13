@@ -4,17 +4,24 @@ using LinearAlgebra
 using Random
 using Test
 
-function dualv(μ⁺, μ⁻, W, W∞, ηp, r, c)
-    pμ = softmax(-(0.5W / W∞ .+ (μ⁺' .- μ⁻')) ./ ηp, norm_dims=2)
-    return 0.5 * dot(W, r .* pμ) + W∞ * dot((sum(r .* pμ, dims=1)' - c), μ⁺ - μ⁻) + ηp * dot(r, neg_entropy(pμ, dims=2))
+function dualv(μ⁺, μ⁻, st, W, W∞, ηp, r, c)
+    pμ = softmax(-(0.5W *st/ W∞ .+ (μ⁺' .- μ⁻')) ./ ηp, norm_dims=2)
+    return (dot(W, r .* pμ) + 
+    2W∞ * dot((sum(r .* pμ, dims=1)' - c), μ⁺ - μ⁻)
+    # 2W∞ * norm((sum(r .* pμ, dims=1)' - c), 1) 
+    + 2W∞*ηp * dot(r, neg_entropy(pμ, dims=2)))
 end
 function primalv(μ⁺p::TA, μ⁻p::TA, st::R, W::TM, W∞::R, ηp::R, r::TA, c::TA) where {TA,TM,R}
     pμ = softmax(-(0.5W / W∞ * st .+ (μ⁺p' .- μ⁻p')) ./ ηp, norm_dims=2)
-    return 0.5 * dot(W, r .* pμ) + W∞ * norm((sum(r .* pμ, dims=1)' - c), 1) + ηp * dot(r, neg_entropy(pμ, dims=2))
+    return (dot(W, r .* pμ)
+    + 2W∞ * norm(sum(r .* pμ, dims=1)' - c, 1) 
+    + 2W∞*ηp * dot(r, neg_entropy(pμ, dims=2)))
 end
 
 function primalv(p::TM, W::TM, W∞::R, ηp::R, r::TA, c::TA) where {TA,TM,R}
-    return 0.5 * dot(W, r .* p) + W∞ * norm((sum(r .* p, dims=1)' - c), 1) + ηp * dot(r, neg_entropy(p, dims=2))
+    return (dot(W, r .* p) +
+     2W∞ * norm(sum(r .* pμ, dims=1)' - c, 1) + 
+    2W∞*ηp * dot(r, neg_entropy(p, dims=2)))
 end
 
 
@@ -68,9 +75,9 @@ function extragradient_ot(r::AbstractArray{R},
         if args.verbose && (i - 1) % frequency == 0
             pr = r .* p
             feas = norm(sum(pr', dims=2) - c, 1)
-            obj = dot(p, W)
+            obj = dot(pr, W)
             pobj = primalv(p, W, W∞, ηp, r, c)
-            dobj = dualv(μ⁺a, μ⁻a, W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺, μ⁻,1.0, W, W∞, ηp, r, c)
 
             @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragrad_primal\n" elapsed_time i feas obj pobj dobj
             if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
@@ -391,6 +398,7 @@ function extragradient_ot_dual(r::CuArray{R},
     W∞ = norm(W, Inf)
     ηp = args.eta_p / 2 / W∞
     ηstep = ηp * W∞
+    # ε /= W∞
     n = size(r, 1)
     if _μ⁺ == Nothing
         μ⁺ = CUDA.ones(R, n) * 0.5
@@ -417,7 +425,7 @@ function extragradient_ot_dual(r::CuArray{R},
     st = s0
 
     threads = 256
-    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    println("time(s),iter,st_gap,infeas,ot_objective,primal,dual,solver")
     time_start = time_ns()
     linear_blocks = Int(ceil(n / threads))
     warp_blocks = Int(ceil(n / div(threads, 32, RoundUp)))
@@ -428,6 +436,7 @@ function extragradient_ot_dual(r::CuArray{R},
         @cuda threads = threads blocks = warp_blocks residual_c!(residual_storage, c, r, W, μ⁺, sumvals, ηp, st, W∞)
     end
     # ηp = 0.1
+    hr = sum(neg_entropy(r))
     for i in 1:args.itermax
         infeas(μ⁺p, μ⁻p)
         @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺t, μ⁻t, μ⁺a, μ⁻a, residual_storage, c, eta_mu, args.eta_mu, args.B, false)
@@ -437,15 +446,16 @@ function extragradient_ot_dual(r::CuArray{R},
             break
         end
         if (i - 1) % frequency == 0
-            obj = dot(W, r .* softmax(-(W * 0.5 * st / W∞ .+ (μ⁺p' .- μ⁻p')) ./ ηp, norm_dims=2))
+            p = softmax(-(W * 0.5 * st / W∞ .+ (μ⁺p' .- μ⁻p')) ./ ηp, norm_dims=2)
+            obj = dot(W, r .* p)
             # pr = r .* p
+            primal_value = primalv(μ⁺p, μ⁻p, st, W, W∞, ηp, r, c) + 2ηp *hr
+            dual_value = dualv(μ⁺a, μ⁻a, 1.0, W, W∞, ηp, r, c) + 2ηp * hr
             # feas = norm(sum(pr, dims=1)' - c, 1)
             feas = norm(c - residual_storage, 1)
-            pobj = primalv(μ⁺p, μ⁻p, st, W, W∞, ηp, r, c)
-            dobj = dualv(μ⁺a, μ⁻a, W, W∞, ηp, r, c)
 
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragrad_dual_cuda\n" elapsed_time i feas obj pobj dobj
-            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragrad_dual_cuda\n" elapsed_time i feas obj primal_value dual_value
+            if feas < args.epsilon / 2 && primal_value - dual_value < args.epsilon / 2
                 break
             end
         end
@@ -456,7 +466,7 @@ function extragradient_ot_dual(r::CuArray{R},
         @cuda threads = threads blocks = linear_blocks update_μ(μ⁺p, μ⁻p, μ⁺p, μ⁻p, μ⁺t, μ⁻t, ηstep)
         # ηp *= 0.99
     end
-    p = softmax(-(W * 0.5 * st .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
+    p = softmax(-(W * 0.5 * st ./ W∞ .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
     return r .* p, μ⁺, μ⁻, st
 end
 
@@ -519,9 +529,9 @@ function extragradient_ot_dual(r::AbstractArray{R},
             feas = norm(sum(pr, dims=1)' - c, 1)
             obj = dot(round(pr, r, c), W)
             pobj = primalv(p, W, W∞, ηp, r, c)
-            dobj = dualv(μ⁺a, μ⁻a, W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺, μ⁻, 1.0, W, W∞, ηp, r, c)
             @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,dual_extrap\n" elapsed_time i feas obj pobj dobj
-            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
+            if (pobj - dobj) < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
         end
@@ -629,12 +639,12 @@ function extragradient_ot_full_dual(r::AbstractArray{R},
             break
         end
         if (i - 1) % frequency == 0
-            p = softmax(-(W * 0.5 .+ μ⁺' .- μ⁻') ./ ηp, norm_dims=2)
+            p = softmax(-(W * 0.5 / W∞ .+ μ⁺' .- μ⁻') ./ ηp, norm_dims=2)
             pr = r .* p
             feas = norm(sum(pr, dims=1)' - c, 1)
             obj = dot(round(pr, r, c), _W)
-            pobj = primalv(p, _W, W∞, ηp, r, c)
-            dobj = dualv(μ⁺, μ⁻, _W, W, W∞, ηp, r, c)
+            pobj = primalv(p,  _W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺, μ⁻, W, W∞, ηp, r, c)
             @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,dual_extrap\n" elapsed_time i feas obj pobj dobj
             if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
                 break
