@@ -103,8 +103,11 @@ function naive_findmaxindex_spp_ct!(output_img::CuDeviceMatrix{T}, img1::CuDevic
         pix2g = img2[2, i]
         pix2b = img2[3, i]
         diff = (2μ[i] - 1)
+        dr = (pix1r - pix2r)
+        dg = (pix1g - pix2g)
+        db = (pix1b - pix2b)
         if p == 1
-            l2dist = abs(pix1r - pix2r) + abs(pix1g - pix2g) + abs(pix1b - pix2b)
+            l2dist = abs(dr) + abs(dg) + abs(db)
         else
             l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
         end
