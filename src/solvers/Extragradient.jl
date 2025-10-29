@@ -85,26 +85,26 @@ function extragradient_ot(r::AbstractArray{R},
             end
         end
         # eta_mu = 1 ./ sum(r .* p, dims=1)'
-        arg = 0.1 * (sum(r .* p, dims=1)' - c) .* eta_mu
+        arg = (sum(r .* p, dims=1)' - c) .* eta_mu
         maxval = max.(arg, -arg)
-        μ⁻t = μ⁻a .^ (1 - 0.1 * args.eta_mu) .* exp.(-arg - maxval)
-        μ⁺t = μ⁺a .^ (1 - 0.1 * args.eta_mu) .* exp.(arg - maxval)
+        μ⁻t = μ⁻a .^ (1 - args.eta_mu) .* exp.(-arg - maxval)
+        μ⁺t = μ⁺a .^ (1 - args.eta_mu) .* exp.(arg - maxval)
         normv = (μ⁻t + μ⁺t)
         μ⁻t = μ⁻t ./ normv
         μ⁺t = μ⁺t ./ normv
-        pt = p .^ (1 - 0.1 * ηp) .* exp.(-0.1 * (ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺a .- μ⁻a)'))
+        pt = p .^ (1 - ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺a .- μ⁻a)'))
         pt ./= sum(pt, dims=2)
         # eta_mu = 1 ./ sum(r .* pt, dims=1)'
-        arg = 0.1 * (sum(r .* pt, dims=1)' - c) .* eta_mu
+        arg = (sum(r .* pt, dims=1)' - c) .* eta_mu
         maxval = max.(arg, -arg)
-        μ⁻ = μ⁻a .^ (1 - 0.1 * args.eta_mu) .* exp.(-arg - maxval)
-        μ⁺ = μ⁺a .^ (1 - 0.1 * args.eta_mu) .* exp.(arg - maxval)
+        μ⁻ = μ⁻a .^ (1 - args.eta_mu) .* exp.(-arg - maxval)
+        μ⁺ = μ⁺a .^ (1 - args.eta_mu) .* exp.(arg - maxval)
 
         normv = (μ⁻ + μ⁺)
         μ⁻ ./= normv
         μ⁺ ./= normv
 
-        p = p .^ (1 - 0.1 * ηp) .* exp.(-0.1 * (ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺t .- μ⁻t)'))
+        p = p .^ (1 - ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺t .- μ⁻t)'))
         p ./= sum(p, dims=2)
         if adjust
             μ⁻a = max.(μ⁻, exp(-args.B) .* max.(μ⁺, μ⁻))
@@ -112,6 +112,8 @@ function extragradient_ot(r::AbstractArray{R},
             normv = (μ⁻a + μ⁺a)
             μ⁻a ./= normv
             μ⁺a ./= normv
+            copy!(μ⁺a, μ⁺)
+            copy!(μ⁻a, μ⁻)
         else
             copy!(μ⁺a, μ⁺)
             copy!(μ⁻a, μ⁻)
@@ -313,7 +315,7 @@ function residual_c!(output::CuDeviceVector{T}, r::CuDeviceArray{T}, W::CuDevice
             if i + local_id > N
                 break
             end
-            value = -(0.5 * st * W[i+local_id, tid_x] ./W∞  + diff) / reg - logZi[i+local_id]
+            value = -(0.5 * st * W[i+local_id, tid_x] ./ W∞ + diff) / reg - logZi[i+local_id]
             local_acc += r[i+local_id] * exp(value)
         end
         local_acc2 = CUDA.reduce_warp(+, local_acc)
@@ -374,7 +376,7 @@ function test_warp_logsumexp!()
 
     println(CUDA.@elapsed begin
         @cuda threads = threads blocks = warp_blocks warp_logsumexp_t_fused!(sumvals2, Wt, μ⁺, ηp, st, W∞)
-        @cuda threads = threads blocks = warp_blocks residual_c!(residual_storage2,  r, W, μ⁺, μ⁻, sumvals, ηp, st)
+        @cuda threads = threads blocks = warp_blocks residual_c!(residual_storage2, r, W, μ⁺, μ⁻, sumvals, ηp, st)
     end)
 
 
@@ -395,8 +397,6 @@ function extragradient_ot_dual(r::CuArray{R},
     s0=0.0
 ) where {R}
     W∞ = norm(W, Inf)
-    ηp = args.eta_p / 2 / W∞
-    ηstep = ηp * W∞
     # ε /= W∞
     n = size(r, 1)
     if _μ⁺ == Nothing
@@ -407,7 +407,8 @@ function extragradient_ot_dual(r::CuArray{R},
         μ⁺ = copy(_μ⁺)
         μ⁻ = copy(_μ⁻)
     end
-
+    ηp = args.eta_p / 2 / W∞
+    ηstep = ηp * W∞
     sumvals = CUDA.zeros(R, n)
     residual_storage = CUDA.zeros(R, (n))
 
@@ -420,11 +421,10 @@ function extragradient_ot_dual(r::CuArray{R},
     μ⁻p = copy(μ⁻)
     μ⁺pa = copy(μ⁺)
     μ⁻pa = copy(μ⁻)
-    μ⁻a = copy(μ⁻)
     st = s0
 
     threads = 256
-    println("time(s),iter,st_gap,infeas,ot_objective,primal,dual,solver")
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
     time_start = time_ns()
     linear_blocks = Int(ceil(n / threads))
     warp_blocks = Int(ceil(n / div(threads, 32, RoundUp)))

@@ -22,7 +22,7 @@ function HPD(r::TA,
     ũ = TA(zeros(N))
     ṽ = TA(zeros(N))
     λ = 2norm(W, Inf)
-    β = 10000log(N) / (N * λ^2)
+    β = 100log(N) / (N * λ^2)
     η = args.eta_p
     θ = η * sqrt(β) / L
     τ = 1 / sqrt(β * L)
@@ -79,11 +79,11 @@ function HPD(r::TA,
             pobj = dot(P̂ ./ T, W) + η * sum(neg_entropy(P̂ ./ T))
             avg_u = û ./ (τθ + T)
             avg_v = v̂ ./ (τθ + T)
-            dobj = -η * sum(logsumexp((-W .+avg_u .+ avg_v') / η)) + dot(avg_v, c) + dot(avg_u, r)
+            dobj = -η * sum(logsumexp((-W .+ avg_u .+ avg_v') / η)) + dot(avg_v, c) + dot(avg_u, r)
 
             infeas = norm(sum(P̂ ./ T, dims=2) - r, 1) + norm(sum(P̂' ./ T, dims=2) - c, 1)
             @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,HPD\n" elapsed_time k infeas obj pobj dobj
-            if pobj-dobj < args.epsilon / 6 && infeas < args.epsilon / 6
+            if pobj - dobj < args.epsilon / 6 && infeas < args.epsilon / 6
                 break
             end
         end

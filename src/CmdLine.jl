@@ -41,6 +41,12 @@ end
     "--cuda"
     help = "Use CUDA"
     action = :store_true
+    "--p"
+    help = "p for distance computation (>= 10 for infinity norm, 0 for uniform cost)"
+    arg_type = Int
+
+    default = 2
+    range_tester = x -> x >= 0
     "--kernel"
     help = "Use kernels to compute OT matrices on the fly (only dual_extragradient and sinkhorn are supported)"
     action = :store_true
@@ -76,6 +82,11 @@ end
     help = "Printing frequency"
     default = 100
     arg_type = Int
+    "--p"
+    help = "p for distance computation (>= 10 for infinity norm, 0 for uniform cost)"
+    arg_type = Int
+    default = 2
+    range_tester = x -> x >= 0
     "--height"
     help = "Image height"
     default = 128
@@ -109,6 +120,11 @@ end
     help = "Printing frequency"
     default = 100
     arg_type = Int
+    "--p"
+    help = "p for distance computation (>= 10 for infinity norm, 0 for uniform cost)"
+    arg_type = Int
+    default = 2
+    range_tester = x -> x >= 0
     "--weights"
     help = "Weights for Barycenter objective (default is uniform). If provided, number of weights must match the number of distributions"
     arg_type = Float64
@@ -139,13 +155,15 @@ function run_dot(parsed_args)
     # mix it with a little bit of the uniform distribution for stability
     r = normalize(marginal1 .+ 1e-6, 1)
     c = normalize(marginal2 .+ 1e-6, 1)
-
+    rng = Xoshiro(0)
     if !parsed_args["kernel"]
-        W = get_euclidean_distance(h, w)
+        W = get_euclidean_distance(h, w; p=parsed_args["p"])
         W∞ = norm(W, Inf)
         # args.eta_p /= W∞
         # args.epsilon /= W∞
         W ./= W∞
+        # W = (W .+ 1) / 2
+        # W .= rand(rng, N, N2)
         if parsed_args["cuda"]
             r, c, W = map(CuArray, [r, c, W])
         end
@@ -160,9 +178,9 @@ function run_dot(parsed_args)
         end
         locations = CuArray(locations)
         if parsed_args["algorithm"] == "sinkhorn"
-            sinkhorn_euclidean(r, c, locations, locations, parsed_args["output1"], parsed_args["output2"], parsed_args["potential-out"], args, parsed_args["frequency"])
+            sinkhorn_euclidean(r, c, locations, locations, parsed_args["output1"], parsed_args["output2"], parsed_args["potential-out"], args, parsed_args["frequency"], parsed_args["p"])
         elseif parsed_args["algorithm"] == "dual_extragradient"
-            extragradient_euclidean(r, c, locations, locations, parsed_args["output1"], parsed_args["output2"], parsed_args["potential-out"], args, parsed_args["frequency"])
+            extragradient_euclidean(r, c, locations, locations, parsed_args["output1"], parsed_args["output2"], parsed_args["potential-out"], args, parsed_args["frequency"], parsed_args["p"])
         end
     end
 end
@@ -171,9 +189,9 @@ function run_ctransfer(parsed_args)
     args = read_args_json(parsed_args["settings"])
     size = (parsed_args["height"], parsed_args["width"])
     if parsed_args["algorithm"] == "dual_extragradient"
-        extragradient_color_transfer(parsed_args["file1"], parsed_args["file2"], parsed_args["output1"], parsed_args["output2"], size, args, parsed_args["frequency"])
+        extragradient_color_transfer(parsed_args["file1"], parsed_args["file2"], parsed_args["output1"], parsed_args["output2"], size, args, parsed_args["frequency"], parsed_args["p"])
     elseif parsed_args["algorithm"] == "sinkhorn"
-        sinkhorn_color_transfer(parsed_args["file1"], parsed_args["file2"], parsed_args["output1"], parsed_args["output2"], size, args, parsed_args["frequency"])
+        sinkhorn_color_transfer(parsed_args["file1"], parsed_args["file2"], parsed_args["output1"], parsed_args["output2"], size, args, parsed_args["frequency"], parsed_args["p"])
     end
 end
 
@@ -203,10 +221,10 @@ function run_barycenter(parsed_args)
     args = read_args_json(parsed_args["settings"])
     W∞ = (h - 1.0)^2 + (w - 1)^2
     if parsed_args["algorithm"] == "sinkhorn"
-        r, mup, mun = sinkhorn_barycenter_kernel(marginals, locations, locations, W∞, args, weights, parsed_args["frequency"])
+        r, mup, mun = sinkhorn_barycenter_kernel(marginals, locations, locations, W∞, args, weights, parsed_args["frequency"], parsed_args["p"])
         outname = ".duals"
     elseif parsed_args["algorithm"] == "dual_extragradient"
-        r, mup, mun = extragradient_barycenter_kernel(marginals, locations, locations, W∞, args, weights, parsed_args["frequency"])
+        r, mup, mun = extragradient_barycenter_kernel(marginals, locations, locations, W∞, args, weights, parsed_args["frequency"], parsed_args["p"])
         outname = ".mu"
     end
     m = size(marginals, 1)

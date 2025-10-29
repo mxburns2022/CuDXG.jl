@@ -123,11 +123,15 @@ function neg_entropy(x::TA; dims=[]) where TA
             end, x), dims=dims)
 end
 
-function get_euclidean_distance(height::Int, width::Int)
+function get_euclidean_distance(height::Int, width::Int; p::Int=2)
     N = height * width
     W = zeros(N, N)
     for (i, j) in product(0:(N-1), 0:(N-1))
-        W[i+1, j+1] = (i ÷ height - j ÷ height)^2 + (i % height - j % height)^2
+        if p < 10
+            W[i+1, j+1] = (abs(i ÷ height - j ÷ height)^p + abs(i % height - j % height)^p)
+        else
+            W[i+1, j+1] = max(abs(i ÷ height - j ÷ height), abs(i % height - j % height))
+        end
     end
     return W
 end

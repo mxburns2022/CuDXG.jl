@@ -53,7 +53,7 @@ end
 function apply_colormap(img::AbstractMatrix{T}, colormap::AbstractVector{Int}) where T<:Real
     imgcopy = img[:, colormap]
 end
-function save_image(path::String, flattened_image::AbstractMatrix{T}, original_shape::Tuple) where T<:Real
+function save_image(path::String, flattened_image::AbstractArray{T}, original_shape::Tuple) where T<:Real
     img = colorview(RGB, restore_image(flattened_image, original_shape))
     save(path, img)
 end

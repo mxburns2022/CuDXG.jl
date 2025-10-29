@@ -251,7 +251,8 @@ function sinkhorn_barycenter_kernel(
     W∞::R,
     args::EOTArgs{R},
     _w::Tw=Nothing,
-    frequency::Int=50
+    frequency::Int=50,
+    p::Int=2
 ) where {R,TW<:CuArray,TA<:CuArray,Tw}
     m = size(c, 1)
     η = args.eta_p
@@ -279,8 +280,8 @@ function sinkhorn_barycenter_kernel(
         fill!(rcache, 0.0)
         for k in 1:m
             # @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(φ[k], loc1, loc2, r, ψ[k], η, W∞)
-            @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(ψ[k], loc1, loc2, c[k], φ[k], η, W∞)
-            @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(φ[k], loc1, loc2, r, ψ[k], η, W∞)
+            @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(ψ[k], loc1, loc2, c[k], φ[k], η, W∞, p)
+            @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(φ[k], loc1, loc2, r, ψ[k], η, W∞, p)
             φ[k] = (φ[k] - log.(r))
             rcache -= w[k] .* φ[k]
         end
@@ -299,11 +300,11 @@ function sinkhorn_barycenter_kernel(
             residual_r = 0.0
             objective = 0.0
             for k in 1:m
-                @cuda threads = threads blocks = blocks residual_opt!(residual_cache, cost_cache, loc1, loc2, r, φ[k], ψ[k], η, W∞)
+                @cuda threads = threads blocks = blocks residual_opt!(residual_cache, cost_cache, loc1, loc2, r, φ[k], ψ[k], η, W∞, p)
                 # CUDA.synchronize()
                 residual_r += w[k] * norm(residual_cache, 1)
                 ot_objective += w[k] * sum(cost_cache)
-                @cuda threads = threads blocks = blocks residual_opt!(residual_cache, cost_cache, loc1, loc2, c[k], ψ[k], φ[k], η, W∞)
+                @cuda threads = threads blocks = blocks residual_opt!(residual_cache, cost_cache, loc1, loc2, c[k], ψ[k], φ[k], η, W∞, p)
                 residual_r += w[k] * norm(residual_cache, 1)
                 objective += w[k] * dot(ψ[k], c[k]) + w[k] * dot(φ[k], r)
             end
@@ -323,7 +324,7 @@ function extragradient_barycenter_kernel(
     W∞::R,
     args::EOTArgs{R},
     _w::Tw=Nothing,
-    frequency::Int=50;
+    frequency::Int=50, p::Int=2;
     s0::Float64=0.0
 ) where {R,TW<:CuArray,TA<:CuArray,Tw}
     st = s0
@@ -355,8 +356,8 @@ function extragradient_barycenter_kernel(
     # Precompute a transposed copy for coalesced reads in the fused LSE kernel
     time_start = time_ns()
     @inline function infeas(μ⁺, r)
-        @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, loc1, loc2, μ⁺, ηp, st, W∞)
-        @cuda threads = threads blocks = warp_blocks residual_spp_c!(residual_storage, cost_storage, loc1, loc2, r, μ⁺, sumvals, ηp, st, W∞)
+        @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, loc1, loc2, μ⁺, ηp, st, W∞, p)
+        @cuda threads = threads blocks = warp_blocks residual_spp_c!(residual_storage, cost_storage, loc1, loc2, r, μ⁺, sumvals, ηp, st, W∞, p)
     end
     # pr
     # ηp = 0.1
@@ -388,7 +389,7 @@ function extragradient_barycenter_kernel(
         if i % frequency == 0
             dual_value = 0.0
             for k in 1:m
-                @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, loc1, loc2, μ⁺[k], ηp, 1.0, W∞)
+                @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, loc1, loc2, μ⁺[k], ηp, 1.0, W∞, p)
 
                 dual_value = ηp * dot(r, sumvals) + dot(c[k], 2μ⁺[k] .- 1)
             end
@@ -401,7 +402,7 @@ function extragradient_barycenter_kernel(
         st = (1 - ηp) * st + ηp
         fill!(r̄, 0.0)
         for k in 1:m
-            @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, loc1, loc2, νt⁺[k], ηp, st, W∞)
+            @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, loc1, loc2, νt⁺[k], ηp, st, W∞, p)
             CUDA.synchronize()
             r̄ += sumvals * w[k]
         end
@@ -419,7 +420,7 @@ function extragradient_barycenter_kernel(
         end
         fill!(r̄, 0.0)
         for k in 1:m
-            @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, loc1, loc2, ν⁺[k], ηp, st, W∞)
+            @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, loc1, loc2, ν⁺[k], ηp, st, W∞, p)
             CUDA.synchronize()
             r̄ += sumvals * w[k]
         end
