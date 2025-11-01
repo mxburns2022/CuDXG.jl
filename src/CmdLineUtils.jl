@@ -15,14 +15,14 @@ ctransfer_solvers = Dict(
     "dual_extragradient" => extragradient_ot_dual,
     "sinkhorn" => sinkhorn_log
 )
-settings = ArgParseSettings(prog="eotfom")
+settings = ArgParseSettings(prog="cudxg")
 @add_arg_table! settings begin
     "run"
-    help = "Run discrete OT problem with an explicit matrix"
+    help = "Run discrete OT problem"
     action = :command
 
     "ctransfer"
-    help = "Perform color transfer using a Euclidean kernel. CUDA is used by default."
+    help = "Perform color transfer using a metric kernel. CUDA is used by default."
     action = :command
 
     "barycenter"
