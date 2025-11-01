@@ -192,7 +192,7 @@ function extragradient_barycenter_dual(
     # ηp = 0.1
     for i in 1:args.itermax
         for k in 1:m
-            infeas(c[k], ν⁺[k], Wt[k], W[k], W∞[k], r)
+            infeas(c[k], ν⁺[k], Wt[k], W[k], W∞[k] * W∞_multiplier, r)
             @cuda threads = threads blocks = linear_blocks update_μ_residual(μt⁺[k], μt⁻[k], μ⁺[k], μ⁻[k], residual_storage, c[k], eta_mu[k], args.eta_mu, args.B, false)
             @cuda threads = threads blocks = linear_blocks update_μ(νt⁺[k], νt⁻[k], ν⁺[k], ν⁻[k], μ⁺[k], μ⁻[k], ηp)
 
@@ -270,7 +270,7 @@ function sinkhorn_barycenter_kernel(
 
     threads = 256
     blocks = Int(ceil(n / div(threads, 32, RoundUp)))
-    println("time(s),iter,infeas,ot_objective,dual")
+    println("time(s),iter,infeas,ot_objective,dual,sinkhorn")
     time_start = time_ns()
     for i in 1:args.itermax
         elapsed_time = (time_ns() - time_start) / 1e9
@@ -361,7 +361,7 @@ function extragradient_barycenter_kernel(
     end
     # pr
     # ηp = 0.1
-    prevobj = 1e-4
+    println("time(s),iter,infeas,ot_objective,primal,dual")
     for i in 1:args.itermax
         cost_value = 0
         primal_value = 0
@@ -393,7 +393,8 @@ function extragradient_barycenter_kernel(
 
                 dual_value = ηp * dot(r, sumvals) + dot(c[k], 2μ⁺[k] .- 1)
             end
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragradient_barycenter_kernel\n" elapsed_time i feas_value cost_value dual_value primal_value
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragradient_barycenter_kernel\n" elapsed_time i feas_value cost_value primal_value dual_value
+            flush(stdout)
             if primal_value - dual_value < args.epsilon / 6 && feas_value < args.epsilon / 6
                 break
             end

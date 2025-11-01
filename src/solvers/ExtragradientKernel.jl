@@ -269,7 +269,7 @@ function warp_logsumexp_spp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{
     end
     return
 end
-function max_logsumexp_spp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T}, img2::CuDeviceMatrix{T}) where T
+function max_logsumexp_spp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T}, img2::CuDeviceMatrix{T}, p::Int) where T
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
@@ -291,8 +291,13 @@ function max_logsumexp_spp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T
             pix2r = img2[1, i+local_id]
             pix2g = img2[2, i+local_id]
             pix2b = img2[3, i+local_id]
-            l2dist = abs(pix1r - pix2r) + abs(pix1g - pix2g) + abs(pix1b - pix2b)
-            # l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
+            if p == 1
+                l2dist = abs(pix1r - pix2r) + abs(pix1g - pix2g) + abs(pix1b - pix2b)
+            else
+                l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
+            end
+            # l2dist = abs(pix1r - pix2r) + abs(pix1g - pix2g) + abs(pix1b - pix2b)
+            
             maxval = max(l2dist, maxval)
         end
         maxval = CUDA.reduce_warp(max, maxval)
@@ -636,6 +641,7 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
     @cuda threads = threads blocks = warp_blocks max_logsumexp_spp_ct!(sumvals, img1, img2)
     CUDA.synchronize()
     W∞ = maximum(sumvals)
+    println(W∞)
     if normalize_cost
         η = T(args.eta_p / 2 / W∞)
     else
@@ -666,7 +672,7 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
             CUDA.synchronize()
             primal_value = η * dot(marginal1, sumvals) + dot(marginal2, 2ν⁺ .- 1) + hr
             residual_value = sum(abs.(residual_cache - marginal2))
-            objective = sum(cost_cache) / W∞
+            objective = sum(cost_cache)
             @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, img1, img2, μ⁺, η, 1.0, W∞, p)
 
             dual_value = η * dot(marginal1, sumvals) + dot(marginal2, 2μ⁺ .- 1) + hr

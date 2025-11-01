@@ -150,3 +150,8 @@ function read_dotmark_data(fpath::String)
     marginal = reshape(input_data, N) / sum(input_data)
     return marginal, h, w, N
 end
+
+function read_weights(fpath::String)
+    W = Float64.(Matrix(CSV.read(fpath, header=false, DataFrame)))
+    return W
+end

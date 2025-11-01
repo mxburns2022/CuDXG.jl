@@ -6,7 +6,7 @@
     "C3": 0.01,
     "B": 1.0,
     "epsilon": 1e-10,
-    "itermax": 1000000,
+    "itermax": 50000,
     "verbose": true,
     "tmax": 600
 }

@@ -5,25 +5,24 @@ using Random
 using Test
 
 function dualv(μ⁺, μ⁻, st, W, W∞, ηp, r, c)
-    pμ = softmax(-(0.5W * st / W∞ .+ (μ⁺' .- μ⁻')) ./ ηp, norm_dims=2)
+    pμ = softmax(-(0.5W * st .+ (W∞ .* (μ⁺ .- μ⁻))') ./ ηp, norm_dims=2)
     return (dot(W, r .* pμ) +
-            2W∞ * dot((sum(r .* pμ, dims=1)' - c), μ⁺ - μ⁻)
+            2 * dot((sum(r .* pμ, dims=1)' - c), W∞ .* (μ⁺ - μ⁻))
             # 2W∞ * norm((sum(r .* pμ, dims=1)' - c), 1) 
-            + 2W∞ * ηp * dot(r, neg_entropy(pμ, dims=2)))
+            + 2ηp * dot(r, neg_entropy(pμ, dims=2)))
 end
-function primalv(μ⁺p::TA, μ⁻p::TA, st::R, W::TM, W∞::R, ηp::R, r::TA, c::TA) where {TA,TM,R}
-    pμ = softmax(-(0.5W / W∞ * st .+ (μ⁺p' .- μ⁻p')) ./ ηp, norm_dims=2)
+function primalv(μ⁺p::TA, μ⁻p::TA, st::R, W::TM, W∞::TWinf, ηp::R, r::TA, c::TA) where {TA,TM,R,TWinf}
+    pμ = softmax(-(0.5W * st .+ (W∞ .* (μ⁺p .- μ⁻p))') ./ ηp, norm_dims=2)
     return (dot(W, r .* pμ)
-            + 2W∞ * norm(sum(r .* pμ, dims=1)' - c, 1)
-            + 2W∞ * ηp * dot(r, neg_entropy(pμ, dims=2)))
+            + 2 .* sum(W∞ .* abs.(sum(r .* pμ, dims=1)' - c))
+            + 2ηp * dot(r, neg_entropy(pμ, dims=2)))
 end
 
-function primalv(p::TM, W::TM, W∞::R, ηp::R, r::TA, c::TA) where {TA,TM,R}
+function primalv(p::TM, W::TM, W∞::TWinf, ηp::R, r::TA, c::TA) where {TA,TM,R,TWinf}
     return (dot(W, r .* p) +
-            2W∞ * norm(sum(r .* p, dims=1)' - c, 1) +
-            2W∞ * ηp * dot(r, neg_entropy(p, dims=2)))
+            2 .* sum(W∞ .* abs.(sum(r .* p, dims=1)' - c)) +
+            2 * ηp * dot(r, neg_entropy(p, dims=2)))
 end
-
 
 function extragradient_ot(r::AbstractArray{R},
     c::AbstractArray{R},
@@ -34,8 +33,9 @@ function extragradient_ot(r::AbstractArray{R},
     p0=Nothing
 ) where {R}
     # input 
-    W∞ = norm(W, Inf)
-    ηp = args.eta_p / 2 / W∞
+    # W∞ = maximum(W', dims=2)
+    W∞ = maximum(W)
+    ηp = args.eta_p / 2
     n = size(r, 1)
     if isa(W, CuArray)
         μ⁺ = 0.5 * CUDA.ones(R, (n, 1))
@@ -44,8 +44,8 @@ function extragradient_ot(r::AbstractArray{R},
     end
 
     μ⁻ = copy(μ⁺)
-    μ⁻a = copy(μ⁺)
-    μ⁺a = copy(μ⁺)
+    ν⁺ = copy(μ⁺)
+    ν⁻ = copy(μ⁺)
     μ⁻t = copy(μ⁺)
     μ⁺t = copy(μ⁺)
     # eta_mu = args.C2 * sqrt(args.B) ./ (c .+ args.C3)
@@ -87,18 +87,18 @@ function extragradient_ot(r::AbstractArray{R},
         # eta_mu = 1 ./ sum(r .* p, dims=1)'
         arg = (sum(r .* p, dims=1)' - c) .* eta_mu
         maxval = max.(arg, -arg)
-        μ⁻t = μ⁻a .^ (1 - args.eta_mu) .* exp.(-arg - maxval)
-        μ⁺t = μ⁺a .^ (1 - args.eta_mu) .* exp.(arg - maxval)
+        μ⁻t = μ⁻ .^ (1 - args.eta_mu) .* exp.(-arg - maxval)
+        μ⁺t = μ⁺ .^ (1 - args.eta_mu) .* exp.(arg - maxval)
         normv = (μ⁻t + μ⁺t)
         μ⁻t = μ⁻t ./ normv
         μ⁺t = μ⁺t ./ normv
-        pt = p .^ (1 - ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺a .- μ⁻a)'))
+        pt = p .^ (1 - ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺ .- μ⁻)'))
         pt ./= sum(pt, dims=2)
         # eta_mu = 1 ./ sum(r .* pt, dims=1)'
         arg = (sum(r .* pt, dims=1)' - c) .* eta_mu
         maxval = max.(arg, -arg)
-        μ⁻ = μ⁻a .^ (1 - args.eta_mu) .* exp.(-arg - maxval)
-        μ⁺ = μ⁺a .^ (1 - args.eta_mu) .* exp.(arg - maxval)
+        μ⁻ = μ⁻ .^ (1 - args.eta_mu) .* exp.(-arg - maxval)
+        μ⁺ = μ⁺ .^ (1 - args.eta_mu) .* exp.(arg - maxval)
 
         normv = (μ⁻ + μ⁺)
         μ⁻ ./= normv
@@ -110,10 +110,8 @@ function extragradient_ot(r::AbstractArray{R},
             μ⁻a = max.(μ⁻, exp(-args.B) .* max.(μ⁺, μ⁻))
             μ⁺a = max.(μ⁺, exp(-args.B) .* max.(μ⁺, μ⁻))
             normv = (μ⁻a + μ⁺a)
-            μ⁻a ./= normv
-            μ⁺a ./= normv
-            copy!(μ⁺a, μ⁺)
-            copy!(μ⁻a, μ⁻)
+            μ⁻ = μ⁻a ./ normv
+            μ⁺ = μ⁺a ./ normv
         else
             copy!(μ⁺a, μ⁺)
             copy!(μ⁻a, μ⁻)
@@ -121,7 +119,6 @@ function extragradient_ot(r::AbstractArray{R},
     end
     return round(r .* p, r, c), μ⁺, μ⁻
 end
-
 
 
 function update_μ(μ⁺::AbstractArray{R}, μ⁻::AbstractArray{R}, μ⁺_1::AbstractArray{R}, μ⁻_1::AbstractArray{R}, μ⁺_2::AbstractArray{R}, μ⁻_2::AbstractArray{R}, η) where R
