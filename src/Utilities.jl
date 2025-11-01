@@ -4,6 +4,7 @@ using JSON3
 using IterTools
 using StructTypes
 using ArgParse
+# using DelimitedFiles
 
 @kwdef struct EOTProblem{TA,TM,R}
     η::R
@@ -18,7 +19,7 @@ end
     eta_mu::R = 0.0
     C1::R = 1.0
     C2::R = 1.0
-    C3::R = 1e-3
+    C3::R = 1e-2
     B::R = 1.0
     epsilon::R = 1e-4
     itermax::Int = 10_000
@@ -59,7 +60,7 @@ function φ(x, prob::EOTProblem)
     return sum(logsumexp(-prob.W / prob.η .+ x[1:prob.N] .+ x[prob.N+1:end]')) - dot(prob.b, x)
 end
 function φ(u::TA, v::TA, r::TA, c::TA, W::TM, η::R) where {TA,TM,R}
-    return -sum(logsumexp(-(W .- u .- v') / η)) + dot(r, u) + dot(c, v)
+    return -η * sum(logsumexp(-(W) / η .- u .- v')) - η * dot(r, u) - η * dot(c, v)
 end
 
 function get_p(x, prob::EOTProblem)
@@ -107,7 +108,13 @@ function polyroot(a, b, c, γ)
     end
     return x
 end
-
+function generate_random_ot(N, rng)
+    r = normalize(rand(rng, N), 1)
+    c = normalize(rand(rng, N), 1)
+    W = abs.(randn(rng, N, N))
+    optimum = emd2(r, c, W)
+    return r, c, W, optimum
+end
 function neg_entropy(x::TA; dims=[]) where TA
     return sum(map(y -> if y > 1e-30
                 y * log(y)
@@ -116,11 +123,15 @@ function neg_entropy(x::TA; dims=[]) where TA
             end, x), dims=dims)
 end
 
-function get_euclidean_distance(height::Int, width::Int)
+function get_euclidean_distance(height::Int, width::Int; p::Int=2)
     N = height * width
     W = zeros(N, N)
     for (i, j) in product(0:(N-1), 0:(N-1))
-        W[i+1, j+1] = (i ÷ height - j ÷ height)^2 + (i % height - j % height)^2
+        if p < 10
+            W[i+1, j+1] = (abs(i ÷ height - j ÷ height)^p + abs(i % height - j % height)^p)
+        else
+            W[i+1, j+1] = max(abs(i ÷ height - j ÷ height), abs(i % height - j % height))
+        end
     end
     return W
 end
@@ -140,5 +151,7 @@ function read_dotmark_data(fpath::String)
     return marginal, h, w, N
 end
 
-
-
+function read_weights(fpath::String)
+    W = Float64.(Matrix(CSV.read(fpath, header=false, DataFrame)))
+    return W
+end

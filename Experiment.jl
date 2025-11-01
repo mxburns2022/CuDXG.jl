@@ -11,11 +11,11 @@ end
 """
 Run DOT solvers on selected problems from the DOTmark_1.0 dataset
 """
-benchmark_classes = ["ClassicImages", "GRFsmooth", "GRFrough"]
-sizes = [32, 64]
-instance_pairs = [(2, 6), (3, 5)]
-algorithms = [keys(solvers)...]
-epsilon = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7]
+benchmark_classes = ["ClassicImages"]
+sizes = [32, 64, 128, 256]
+instance_pairs = [(2, 6)]
+algorithms = ["dual_extragradient"]
+epsilon = [1e-6]
 deleteat!(algorithms, findall(algorithms .== "apdagd"))
 
 for (size, (ind1, ind2), solver, probclass, eps) in product(sizes, instance_pairs, algorithms, benchmark_classes, epsilon)

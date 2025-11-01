@@ -58,6 +58,9 @@ end
 function g(μ, W, s, r)
     return η * dot(r, logsumexp(-(0.5 * s .* W .+ μ' .- (1 .- μ)') ./ η, 2))
 end
+function g(μ, W, s, r)
+    return η * dot(r, logsumexp(-(0.5 * s .* W .+ μ' .- (1 .- μ)') ./ η, 2))
+end
 
 function colvec(ν, W, s, r)
     p = r .* softmax(-(0.5 * s .* W .+ ν' .- (1 .- ν)') ./ η, norm_dims=2)
@@ -89,7 +92,7 @@ function test_val()
             cμ = colvec(μ, W, s, r)
             # cν = colvec(ν, W, s, r)
             eigvals2 = eigvals(diagm(cμ - c ./ μ) - cμ * cμ')
-            v = argmax(cμ - c ./ μ)
+            v = argmax(cμ - 2c ./ μ)
             println(cμ[v], " ", c[v] / μ[v], " ", cμ[v] / (c[v] / μ[v]))
             # println(μ, ν)
             # μ = zeros(N)

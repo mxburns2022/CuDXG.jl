@@ -13,7 +13,8 @@ include("solvers/APDAMD.jl")
 include("solvers/APDAGD.jl")
 include("solvers/Greenkhorn.jl")
 include("solvers/AccSinkhorn.jl")
-include("CmdLine.jl")
+include("solvers/HPD.jl")
+include("CmdLineUtils.jl")
 include("solvers/ExtragradientBarycenter.jl")
 export read_dotmark_data, get_euclidean_distance
 export extragradient_ot, extragradient_ot_dual, extragradient_ot_full_dual, extragradient_barycenter_dual
