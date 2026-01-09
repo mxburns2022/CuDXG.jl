@@ -23,7 +23,182 @@ function primalv(p::TM, W::TM, W∞::TWinf, ηp::R, r::TA, c::TA) where {TA,TM,R
             2 .* sum(W∞ .* abs.(sum(r .* p, dims=1)' - c)) +
             2 * ηp * dot(r, neg_entropy(p, dims=2)))
 end
+function papc_extragradient(r::AbstractArray{R},
+    c::AbstractArray{R},
+    W::AbstractMatrix{R},
+    args::EOTArgs{R},
+    frequency::Int=50;
+    adjust::Bool=true,
+    p0=Nothing
+) where {R}
+    # input 
+    # W∞ = maximum(W', dims=2)
+    W∞ = maximum(W)
+    ηp = args.eta_p / 2
+    n = size(r, 1)
+    if isa(W, CuArray)
+        μ⁺ = 0.5 * CUDA.ones(R, (n, 1))
+    else
+        μ⁺ = 0.5 * ones(R, (n, 1))
+    end
 
+    μ⁻ = copy(μ⁺)
+    ν⁺ = copy(μ⁺)
+    ν⁻ = copy(μ⁺)
+    μ⁻t = copy(μ⁺)
+    μ⁺t = copy(μ⁺)
+    eta_mu = args.C2 * 1 ./ (c .+ args.C3 / n)
+    ηπ = args.C2 / 1. ./ r
+    if p0 == Nothing
+        if isa(W, CuArray)
+            p = CUDA.ones(R, (n, n)) ./ (n)
+        else
+            p = ones(R, (n, n)) ./ (n)
+        end
+    else
+        if isa(W, CuArray)
+            p = CuArray(p0) ./ r
+        else
+            p = (p0) ./ r
+        end
+    end
+
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    time_start = time_ns()
+    for i in 1:args.itermax
+        elapsed_time = (time_ns() - time_start) / 1e9
+        if elapsed_time > args.tmax
+            break
+        end
+        if args.verbose && (i - 1) % frequency == 0
+            pr = r .* p
+            feas = norm(sum(pr', dims=2) - c, 1)
+            obj = dot(pr, W)
+            pobj = primalv(p, W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺, μ⁻, 1.0, W, W∞, ηp, r, c)
+
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragrad_primal\n" elapsed_time i feas obj pobj dobj
+            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
+                break
+            end
+        end
+
+        arg = (sum(r .* p, dims=1)' - c) .* eta_mu #./ (1 + args.eta_mu)
+        maxval = max.(arg, -arg)
+        μ⁻t = μ⁻ .^ (1 - args.eta_mu) .* exp.(-arg - maxval)
+        μ⁺t = μ⁺ .^ (1 - args.eta_mu) .* exp.(arg - maxval)
+
+        normv = (μ⁻t + μ⁺t)
+        μ⁻t ./= normv
+        μ⁺t ./= normv
+        p = p .^ (1 / (1 + ηp)) .* exp.(-(W * 0.5 / W∞ .+ (μ⁺t .- μ⁻t)') ./ (1 + ηp))
+        p ./= sum(p, dims=2)
+
+
+        arg = (sum(r .* p, dims=1)' - c) .* eta_mu #./ (1 + args.eta_mu)
+        maxval = max.(arg, -arg)
+        μ⁻ = μ⁻ .^ (1 - args.eta_mu) .* exp.(-arg - maxval)
+        μ⁺ = μ⁺ .^ (1 - args.eta_mu) .* exp.(arg - maxval)
+
+    end
+    return round(r .* p, r, c), μ⁺, μ⁻
+end
+
+function prototype_extragradient_ot(r::AbstractArray{R},
+    c::AbstractArray{R},
+    W::AbstractMatrix{R},
+    args::EOTArgs{R},
+    frequency::Int=50;
+    adjust::Bool=true,
+    p0=Nothing
+) where {R}
+    # input 
+    # W∞ = maximum(W', dims=2)
+    W∞ = maximum(W)
+    ηp = args.eta_p / 2
+    n = size(r, 1)
+    if isa(W, CuArray)
+        μ⁺ = 0.5 * CUDA.ones(R, (n, 1))
+    else
+        μ⁺ = 0.5 * ones(R, (n, 1))
+    end
+
+    μ⁻ = copy(μ⁺)
+    ν⁺ = copy(μ⁺)
+    ν⁻ = copy(μ⁺)
+    μ⁻t = copy(μ⁺)
+    μ⁺t = copy(μ⁺)
+    eta_mu = args.C2 * 1 ./ sqrt.(c .+ args.C3 / n)
+    ηπ = args.C2 / 1. ./ r
+    if p0 == Nothing
+        if isa(W, CuArray)
+            p = CUDA.ones(R, (n, n)) ./ (n)
+        else
+            p = ones(R, (n, n)) ./ (n)
+        end
+    else
+        if isa(W, CuArray)
+            p = CuArray(p0) ./ r
+        else
+            p = (p0) ./ r
+        end
+    end
+
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    time_start = time_ns()
+    for i in 1:args.itermax
+        elapsed_time = (time_ns() - time_start) / 1e9
+        if elapsed_time > args.tmax
+            break
+        end
+        if args.verbose && (i - 1) % frequency == 0
+            pr = r .* p
+            feas = norm(sum(pr', dims=2) - c, 1)
+            obj = dot(pr, W)
+            pobj = primalv(p, W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺, μ⁻, 1.0, W, W∞, ηp, r, c)
+
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragrad_primal\n" elapsed_time i feas obj pobj dobj
+            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
+                break
+            end
+        end
+        # # eta_mu = 1 ./ sum(r .* p, dims=1)'
+        arg = (sum(r .* p, dims=1)' - c) .* eta_mu ./ (1 + args.eta_mu)
+        maxval = max.(arg, -arg)
+        μ⁻t = μ⁻ .^ (1 / (1 + args.eta_mu)) .* exp.(-arg - maxval)
+        μ⁺t = μ⁺ .^ (1 / (1 + args.eta_mu)) .* exp.(arg - maxval)
+        normv = (μ⁻t + μ⁺t)
+        μ⁻t = μ⁻t ./ normv
+        μ⁺t = μ⁺t ./ normv
+        pt = p .^ (1 .- ηp) .* exp.(-(W * 0.5 / W∞ .+ (μ⁺ .- μ⁻)'))
+        # pt = p .^ (1 - ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺ .- μ⁻)'))
+        pt ./= sum(pt, dims=2)
+        # eta_mu = 1 ./ sum(r .* pt, dims=1)'
+        arg = (sum(r .* pt, dims=1)' - c) .* eta_mu ./ (1 + args.eta_mu)
+        maxval = max.(arg, -arg)
+        μ⁻ = μ⁻ .^ (1 / (1 + args.eta_mu)) .* exp.(-arg - maxval)
+        μ⁺ = μ⁺ .^ (1 / (1 + args.eta_mu)) .* exp.(arg - maxval)
+
+        normv = (μ⁻ + μ⁺)
+        μ⁻ ./= normv
+        μ⁺ ./= normv
+        p = p .* pt .^ (-ηp) .* exp.(-(W * 0.5 / W∞ .+ (μ⁺t .- μ⁻t)'))
+        # p = p .^ (1 - ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺ .- μ⁻)'))
+        p ./= sum(p, dims=2)
+        if adjust
+            μ⁻a = max.(μ⁻, exp(-args.B) .* max.(μ⁺, μ⁻))
+            μ⁺a = max.(μ⁺, exp(-args.B) .* max.(μ⁺, μ⁻))
+            normv = (μ⁻a + μ⁺a)
+            μ⁻ = μ⁻a ./ normv
+            μ⁺ = μ⁺a ./ normv
+        else
+            copy!(μ⁺a, μ⁺)
+            copy!(μ⁻a, μ⁻)
+        end
+    end
+    return round(r .* p, r, c), μ⁺, μ⁻
+end
 function extragradient_ot(r::AbstractArray{R},
     c::AbstractArray{R},
     W::AbstractMatrix{R},
@@ -50,6 +225,7 @@ function extragradient_ot(r::AbstractArray{R},
     μ⁺t = copy(μ⁺)
     # eta_mu = args.C2 * sqrt(args.B) ./ (c .+ args.C3)
     eta_mu = args.C2 * sqrt(args.B) ./ (c .+ args.C3 / n)
+    eta_mu = args.C2 * sqrt(args.B) ./ (c)
     ηπ = args.C2 / sqrt(args.B) ./ r
     if p0 == Nothing
         if isa(W, CuArray)
@@ -103,8 +279,8 @@ function extragradient_ot(r::AbstractArray{R},
         normv = (μ⁻ + μ⁺)
         μ⁻ ./= normv
         μ⁺ ./= normv
-
-        p = p .^ (1 - ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺t .- μ⁻t)'))
+        p = p .* pt .^ (-ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺t .- μ⁻t)'))
+        # p = p .^ (1 - ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺t .- μ⁻t)'))
         p ./= sum(p, dims=2)
         if adjust
             μ⁻a = max.(μ⁻, exp(-args.B) .* max.(μ⁺, μ⁻))
@@ -129,6 +305,14 @@ function update_μ(μ⁺::AbstractArray{R}, μ⁻::AbstractArray{R}, μ⁺_1::Ab
     μ⁻ ./= normv
 end
 
+function update_μ_other(μ⁺::AbstractArray{R}, μ⁻::AbstractArray{R}, μ⁺_1::AbstractArray{R}, μ⁻_1::AbstractArray{R}, μ⁺_2::AbstractArray{R}, μ⁻_2::AbstractArray{R}, μ⁺_3::AbstractArray{R}, μ⁻_3::AbstractArray{R}, η) where R
+    μ⁺ .= μ⁺_1 + η * (μ⁺_2 - μ⁺_3)
+    μ⁻ .= μ⁻_1 + η * (μ⁻_2 - μ⁻_3)
+    normv = (μ⁺ + μ⁻)
+    μ⁺ ./= normv
+    μ⁻ ./= normv
+end
+
 function update_μ(μ⁺::CuDeviceArray{R}, μ⁻::CuDeviceArray{R}, μ⁺_1::CuDeviceArray{R}, μ⁻_1::CuDeviceArray{R}, μ⁺_2::CuDeviceArray{R}, μ⁻_2::CuDeviceArray{R}, η) where R
     N = size(μ⁺, 1)
     tid = threadIdx().x + blockDim().x * (blockIdx().x - 1)
@@ -146,32 +330,63 @@ function update_μ(μ⁺::CuDeviceArray{R}, μ⁻::CuDeviceArray{R}, μ⁺_1::Cu
     return
 end
 
-
-function update_μ_residual(μ⁺::CuDeviceArray{R}, μ⁻::CuDeviceArray{R}, μ⁺a::CuDeviceArray{R}, μ⁻a::CuDeviceArray{R}, residual::CuDeviceArray{R}, c::CuDeviceArray{R}, eta_muᵢ::CuDeviceArray{R}, eta_mu::R, B::R, adjust::Bool) where R
+function update_μ(μ⁺::CuDeviceArray{R}, μ⁻::CuDeviceArray{R}, μ⁺_1::CuDeviceArray{R}, μ⁻_1::CuDeviceArray{R}, μ⁺_2::CuDeviceArray{R}, μ⁻_2::CuDeviceArray{R}, μ⁺_3::CuDeviceArray{R}, μ⁻_3::CuDeviceArray{R}, η) where R
     N = size(μ⁺, 1)
     tid = threadIdx().x + blockDim().x * (blockIdx().x - 1)
     if tid > N
         return
     end
-    eta_muᵢ_tid = 1 / eta_muᵢ[tid]
-    difference = residual[tid] - c[tid]
-    maxval = eta_muᵢ_tid * max(-difference, difference)
-    new_μ⁺ = μ⁺a[tid]^(1 - eta_mu) * exp(eta_muᵢ_tid * (difference) - maxval)
-    new_μ⁻ = μ⁻a[tid]^(1 - eta_mu) * exp(-eta_muᵢ_tid * (difference) - maxval)
-    normv = new_μ⁺ + new_μ⁻
-    new_μ⁺ /= normv
-    new_μ⁻ /= normv
+    new_μplus = μ⁺_1[tid] + η * (μ⁺_2[tid] - μ⁺_3[tid])
+    new_μminus = μ⁻_1[tid] + η * (μ⁻_2[tid] - μ⁻_3[tid])
+    normv = new_μplus + new_μminus
+    new_μplus /= normv
+    new_μminus /= normv
+    μ⁺[tid] = new_μplus
+    μ⁻[tid] = new_μminus
 
-    μ⁺[tid] = new_μ⁺
-    μ⁻[tid] = new_μ⁻
+    return
+end
+function update_μ_other(mu_plus::CuDeviceArray{R}, mu_minus::CuDeviceArray{R}, mu_plus_1::CuDeviceArray{R}, mu_minus_1::CuDeviceArray{R}, mu_plus_2::CuDeviceArray{R}, mu_minus_2::CuDeviceArray{R}, eta) where R
+    N = size(mu_plus, 1)
+    tid = threadIdx().x + blockDim().x * (blockIdx().x - 1)
+    if tid > N
+        return
+    end
+    new_μplus = mu_plus_1[tid] + eta * (mu_plus_2[tid] - mu_plus_1[tid])
+    new_μminus = mu_minus_1[tid] + eta * (mu_minus_2[tid] - mu_minus_1[tid])
+    normv = new_μplus + new_μminus
+    new_μplus /= normv
+    new_μminus /= normv
+    mu_plus[tid] = new_μplus
+    mu_minus[tid] = new_μminus
+
+    return
+end
+
+function update_μ_residual(mu_plus::CuDeviceArray{R}, mu_minus::CuDeviceArray{R}, mu_plus_a::CuDeviceArray{R}, mu_minus_a::CuDeviceArray{R}, residual::CuDeviceArray{R}, c::CuDeviceArray{R}, eta_mu_i::CuDeviceArray{R}, eta_mu::R, B::R, adjust::Bool) where R
+    N = size(mu_plus, 1)
+    tid = threadIdx().x + blockDim().x * (blockIdx().x - 1)
+    if tid > N
+        return
+    end
+    difference = (residual[tid] - c[tid]) / eta_mu_i[tid]
+    maxval = max(-difference, difference)
+    new_mu_plus = mu_plus_a[tid]^(1 - eta_mu) * exp((difference) - maxval)
+    new_mu_minus = mu_minus_a[tid]^(1 - eta_mu) * exp(-difference - maxval)
+    normv = new_mu_plus + new_mu_minus
+    new_mu_plus /= normv
+    new_mu_minus /= normv
+
+    mu_plus[tid] = new_mu_plus
+    mu_minus[tid] = new_mu_minus
     if adjust
-        new_μ⁻a = max(new_μ⁻, exp(-B) * max(new_μ⁺, new_μ⁻))
-        new_μ⁺a = max(new_μ⁺, exp(-B) * max(new_μ⁺, new_μ⁻))
-        normv = (new_μ⁻a + new_μ⁺a)
-        new_μ⁺a /= normv
-        new_μ⁻a /= normv
-        μ⁺a[tid] = new_μ⁺a
-        μ⁻a[tid] = new_μ⁻a
+        new_mu_minus_a = max(new_mu_minus, exp(-B) * max(new_mu_plus, new_mu_minus))
+        new_mu_plus_a = max(new_mu_plus, exp(-B) * max(new_mu_plus, new_mu_minus))
+        normv = (new_mu_minus_a + new_mu_plus_a)
+        new_mu_plus_a /= normv
+        new_mu_minus_a /= normv
+        mu_plus_a[tid] = new_mu_plus_a
+        mu_minus_a[tid] = new_mu_minus_a
     end
 
     return
@@ -233,18 +448,19 @@ end
     return (m, s1 * exp(m1 - m) + s2 * exp(m2 - m))
 end
 
-function warp_logsumexp_t_fused!(output::CuDeviceVector{T}, Wt::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, reg::T, st::T, W∞::T) where T
+function warp_logsumexp_t_fused!(output::CuDeviceVector{T}, Wt::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, reg::T, st::T, Winf::T) where T
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
     N = size(Wt, 1)  # Wt is transposed: first dim iterates columns j
-    N_outer = Int(ceil(N / nwarps))
+    M = size(Wt, 2)
+    N_outer = Int(ceil(M / nwarps))
     local_id = (threadIdx().x - 1) % step
     # Precompute scalars to avoid divisions in the inner loop
-    α = (0.5 * st) / (reg * W∞)
+    α = (0.5 * st) / (reg * Winf)
     invreg = one(T) / reg
     @inbounds for _ in 1:N_outer
-        if tid_x > N
+        if tid_x > M
             return
         end
         # Online log-sum-exp per thread
@@ -294,11 +510,12 @@ function warp_logsumexp_t_fused!(output::CuDeviceVector{T}, Wt::CuDeviceMatrix{T
 end
 
 
-function residual_c!(output::CuDeviceVector{T}, r::CuDeviceArray{T}, W::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, logZi::CuDeviceVector{T}, reg::T, st::T, W∞::T) where T
+function residual_c!(output::CuDeviceVector{T}, r::CuDeviceArray{T}, W::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, logZi::CuDeviceVector{T}, reg::T, st::T, Winf::T) where T
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
-    N = size(r, 1)
+    M = size(r, 1)
+    N = size(μ⁺, 1)
     N_outer = Int(ceil(N / nwarps))
     local_id = (threadIdx().x - 1) % step
     for i in 1:N_outer
@@ -308,11 +525,11 @@ function residual_c!(output::CuDeviceVector{T}, r::CuDeviceArray{T}, W::CuDevice
         diff = (2μ⁺[tid_x] - 1)
 
         local_acc = 0.0
-        for i in 1:step:N
-            if i + local_id > N
+        for i in 1:step:M
+            if i + local_id > M
                 break
             end
-            value = -(0.5 * st * W[i+local_id, tid_x] ./ W∞ + diff) / reg - logZi[i+local_id]
+            value = -(0.5 * st * W[i+local_id, tid_x] ./ Winf + diff) / reg - logZi[i+local_id]
             local_acc += r[i+local_id] * exp(value)
         end
         local_acc2 = CUDA.reduce_warp(+, local_acc)
@@ -395,7 +612,9 @@ function extragradient_ot_dual(r::CuArray{R},
 ) where {R}
     W∞ = norm(W, Inf)
     # ε /= W∞
-    n = size(r, 1)
+    n = size(c, 1)
+    m = size(r, 1)
+    @assert size(W) == (m, n)
     if _μ⁺ == Nothing
         μ⁺ = CUDA.ones(R, n) * 0.5
         μ⁻ = copy(μ⁺)
@@ -406,7 +625,7 @@ function extragradient_ot_dual(r::CuArray{R},
     end
     ηp = args.eta_p / 2 / W∞
     ηstep = ηp * W∞
-    sumvals = CUDA.zeros(R, n)
+    sumvals = CUDA.zeros(R, m)
     residual_storage = CUDA.zeros(R, (n))
 
     μ⁻a = copy(μ⁻)
@@ -443,7 +662,7 @@ function extragradient_ot_dual(r::CuArray{R},
         end
         if (i - 1) % frequency == 0
             p = softmax(-(W * 0.5 * st / W∞ .+ (μ⁺p' .- μ⁻p')) ./ ηp, norm_dims=2)
-            obj = dot(W, r .* p)
+            obj = dot(W, round(r .* p, r, c))
             # pr = r .* p
             primal_value = primalv(μ⁺p, μ⁻p, st, W, W∞, ηp, r, c) + 2ηp * hr
             dual_value = dualv(μ⁺, μ⁻, 1.0, W, W∞, ηp, r, c) + 2ηp * hr
@@ -498,7 +717,7 @@ function extragradient_ot_dual(r::AbstractArray{R},
     eta_mu = (c .+ args.C3 / n) ./ (args.C2)
     μ⁺p = copy(μ⁺)
     μ⁻p = copy(μ⁻)
-    ηpstep = 0.8
+    ηpstep = 1.0
     μ⁺pa = copy(μ⁺)
     μ⁻pa = copy(μ⁻)
     μ⁻a = copy(μ⁻)
@@ -518,20 +737,7 @@ function extragradient_ot_dual(r::AbstractArray{R},
         if elapsed_time > args.tmax
             break
         end
-        if (i - 1) % frequency == 0
-            p = softmax(-(0.5W * st / W∞ .+ (μ⁺p' .- μ⁻p')) ./ ηp, norm_dims=2)
-            # println(p)
-            # sleep(1)
-            pr = r .* p
-            feas = norm(sum(pr, dims=1)' - c, 1)
-            obj = dot(round(pr, r, c), W)
-            pobj = primalv(p, W, W∞, ηp, r, c)
-            dobj = dualv(μ⁺, μ⁻, 1.0, W, W∞, ηp, r, c)
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,dual_extrap\n" elapsed_time i feas obj pobj dobj
-            if (pobj - dobj) < args.epsilon / 6 && feas < args.epsilon / 6
-                break
-            end
-        end
+
         infeas(μ⁺p, μ⁻p)
         # copy!(eta_mu, residual_storage)
         μ⁻t = μ⁻a .^ (1 - args.eta_mu) .* exp.(-(residual_storage - c) ./ eta_mu)
@@ -548,7 +754,20 @@ function extragradient_ot_dual(r::AbstractArray{R},
 
         st = (1 - ηpstep * ηp) * st + ηpstep * ηp
 
-
+        if (i - 1) % frequency == 0
+            p = softmax(-(0.5W * st / W∞ .+ (μ⁺p' .- μ⁻p')) ./ ηp, norm_dims=2)
+            # println(p)
+            # sleep(1)
+            pr = r .* p
+            feas = norm(sum(pr, dims=1)' - c, 1)
+            obj = dot(round(pr, r, c), W)
+            pobj = primalv(p, W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺, μ⁻, 1.0, W, W∞, ηp, r, c)
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,dual_extrap\n" elapsed_time i feas obj pobj dobj
+            if (pobj - dobj) < args.epsilon / 6 && feas < args.epsilon / 6
+                break
+            end
+        end
 
 
         infeas(μ⁺pa, μ⁻pa)
@@ -560,6 +779,8 @@ function extragradient_ot_dual(r::AbstractArray{R},
 
         μ⁺p = μ⁺p + ηpstep * ηp * (μ⁺t - μ⁺p)
         μ⁻p = μ⁻p + ηpstep * ηp * (μ⁻t - μ⁻p)
+        # μ⁺p = μ⁺p + ηpstep * ηp * (μ⁺t - μ⁺pa)
+        # μ⁻p = μ⁻p + ηpstep * ηp * (μ⁻t - μ⁻pa)
 
         normv = (μ⁺p + μ⁻p)
         μ⁺p ./= normv
@@ -578,7 +799,144 @@ function extragradient_ot_dual(r::AbstractArray{R},
     sumvals = logsumexp(-(0.5W / W∞ .+ (μ⁺' .- μ⁻')) ./ ηp, 2)
     return r .* p, μ⁺, μ⁻, sumvals
 end
+function papc_ot_dual(r::AbstractArray{R},
+    c::AbstractArray{R},
+    W::AbstractMatrix{R},
+    args::EOTArgs{R},
+    frequency::Int=50;
+    s0::Float64=0.0
+) where {R}
 
+    ηp = args.eta_p / 2
+    n = size(c, 1)
+
+    m = size(r, 1)
+    @assert ((m, n) == size(W))
+    W∞ = CUDA.zeros(R, n)
+    maximum!(W∞', W)
+
+    W∞ = maximum(W)
+    # W /= W∞
+    # W∞ = 0.5
+    # W *= W∞
+    μ⁺ = CUDA.ones(R, n) * 0.5
+
+    sumvals = CUDA.zeros(R, m)
+    residual_storage = CUDA.zeros(R, n)
+    maxvals = CUDA.zeros(R, m)
+
+
+    μ⁻ = copy(μ⁺)
+    μ⁻a = copy(μ⁻)
+    μ⁺a = copy(μ⁺)
+    μ⁻t = copy(μ⁻)
+    μ⁺t = copy(μ⁺)
+    eta_mu = (c .+ args.C3 / n) ./ (1.0)
+    μ⁺p = copy(μ⁺)
+    μ⁻p = copy(μ⁻)
+    # ηpstep = 2.0
+    μ⁺pa = copy(μ⁺)
+    μ⁻pa = copy(μ⁻)
+    μ⁻a = copy(μ⁻)
+    st = s0
+    println("time(s),iter,infeas,ot_objective,primal,dual,solver")
+    time_start = time_ns()
+    println(size(W∞)," ", size(W)," ", m," ", n)
+    function sumval(μ⁺, μ⁻)
+        maximum!(maxvals, -(0.5W * st .+ (W∞.*(μ⁺ .- μ⁻))') ./ ηp)
+
+        sum!(sumvals, exp.(-(0.5W * st .+ (W∞.*(μ⁺ .- μ⁻))') ./ ηp .- maxvals))
+
+        return sum(W .* exp.(-(0.5W * st .+(W∞.*(μ⁺ .- μ⁻))') ./ ηp .- maxvals .- log.(sumvals) .+ log.(r)))
+    end
+    function infeas(μ⁺, μ⁻)
+
+        maximum!(maxvals, -(0.5W * st .+  (W∞.*(μ⁺ - μ⁻))') ./ ηp)
+
+        sum!(sumvals, exp.(-(0.5W * st .+  (W∞.*(μ⁺ - μ⁻))') ./ ηp .- maxvals))
+
+        sum!(residual_storage', exp.(-(0.5W * st .+  (W∞.*(μ⁺ - μ⁻))') ./ ηp .- maxvals .- log.(sumvals) .+ log.(r)))
+        # return sum(W .* exp.(-(0.5W * st ./ W∞ .+ (μ⁺' .- μ⁻')) ./ ηp .- maxvals .- log.(sumvals) .+ log.(r)))
+    end
+    vp = CUDA.zeros(R, n)
+    vm = CUDA.zeros(R, n)
+    st2 = 1.0
+    for i in 1:args.itermax
+        elapsed_time = (time_ns() - time_start) / 1e9
+        if elapsed_time > args.tmax
+            break
+        end
+        μ⁺pa = (1 - ηp) * μ⁺p + ηp * μ⁺
+        μ⁻pa = (1 - ηp) * μ⁻p + ηp * μ⁻
+
+
+        st = st * (1 - ηp) + ηp
+        # println(st, " ", st2)
+        # st /= (st + (1-st))
+        # st = st * (1-ηp ) + ηp
+        # println(st)
+
+        infeas(μ⁺pa, μ⁻pa)
+        # eta_mu = (residual_storage) ./ (args.C2)
+        # st = st + ηp * sumval(μ⁺pa, μ⁻pa)
+        # residual_sum += (residual_storage - c)
+        argument =  (residual_storage - c) ./ eta_mu ./ W∞
+        maxval = max.(argument, -argument)
+        kl_orig = μ⁺' * log.(μ⁺ ./ μ⁺p) + (μ⁻)' * log.((μ⁻) ./ (μ⁻p))
+        μ⁻ = μ⁻ .* exp.(-argument .- maxval)#(sum(r .* pt, dims=1)' - c))
+        μ⁺ = μ⁺ .* exp.(argument .- maxval)
+        normv = (μ⁻ + μ⁺)
+        μ⁻ ./= normv
+        μ⁺ ./= normv
+        # mup_temp = max.(μ⁺, exp(-args.B) * max.(μ⁺, μ⁻))
+        # mun_temp = max.(μ⁻, exp(-args.B) * max.(μ⁺, μ⁻))
+        # normv = (mup_temp + mun_temp)
+        # μ⁻ .= mun_temp ./ normv
+        # μ⁺ .= mup_temp ./ normv
+
+        # μ⁻a = max.(μ⁻, exp(-args.B) .* max.(μ⁺, μ⁻))
+        # μ⁺a = max.(μ⁺, exp(-args.B) .* max.(μ⁺, μ⁻))
+        # normv = (μ⁻a + μ⁺a)
+        # μ⁻ = μ⁻a ./ normv
+        # μ⁺ = μ⁺a ./ normv
+        # # st = st1 * (1-ηp)  + ηp * st2
+        μ⁺p = (1 - ηp) * μ⁺p + ηp * μ⁺
+        μ⁻p = (1 - ηp) * μ⁻p + ηp * μ⁻
+        # μ⁺p ./= normv
+        # μ⁻p ./= normv
+        vp += μ⁺p
+        vm += μ⁻p
+        # println(μ⁺' * log.(μ⁺./μ⁺pa))
+        # return
+        if (i - 1) % frequency == 0
+            p = softmax(-(0.5W * st .+ ((μ⁺p .- μ⁻p).*W∞)') ./ (ηp), norm_dims=2)
+            # println(p)
+            # p2 = (K .^ st) .* exp.(-(μ⁺p - μ⁻p) ./ (1 + ηp) .- st)'
+            # p2 ./= sum(p2, dims=2)
+            # println(norm(p - p2))
+            # sleep(1)
+            pr = r .* p
+            feas = norm(sum(pr, dims=1)' - c, 1)
+            obj = dot(round(pr, r, c), W)
+            pobj = primalv(p, W, W∞, ηp, r, c)
+            dobj = dualv(μ⁺, μ⁻, 1.0, W, W∞, ηp, r, c)
+
+            # println(ηp * (μ⁺' * log.(μ⁺ ./ μ⁺pa) + (μ⁻)' * log.((μ⁻) ./ (μ⁻pa))), " ", -μ⁺' * log.(μ⁺ ./ μ⁺p) - (μ⁻)' * log.((μ⁻) ./ (μ⁻p)) + kl_orig)
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,%.14e,dual_extrap\n" elapsed_time i feas obj pobj dobj pobj - dobj
+            if (pobj - dobj) < args.epsilon / 6 && feas < args.epsilon / 6
+                break
+            end
+        end
+
+
+
+        # println(norm(μ⁺a - μ⁺) + norm(μ⁻a - μ⁻))
+
+    end
+    p = softmax(-(0.5W  .+( (μ⁺ .- μ⁻).*W∞)') ./ ηp, norm_dims=2)
+    sumvals = logsumexp(-(0.5W  .+( (μ⁺ .- μ⁻).*W∞)') ./ ηp, 2)
+    return r .* p, μ⁺, μ⁻, sumvals
+end
 # +-----------------------------+
 # | This one does not bring joy |
 # +-----------------------------+

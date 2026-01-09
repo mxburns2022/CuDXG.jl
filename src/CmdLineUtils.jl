@@ -15,6 +15,10 @@ ctransfer_solvers = Dict(
     "dual_extragradient" => extragradient_ot_dual,
     "sinkhorn" => sinkhorn_log
 )
+barycenter_solvers = Set([
+    "dual_extragradient",
+    "ipb"]
+)
 settings = ArgParseSettings(prog="cudxg")
 @add_arg_table! settings begin
     "run"
@@ -43,7 +47,8 @@ end
     action = :store_true
     "--p"
     help = "p for distance computation (>= 10 for infinity norm, 0 for uniform cost)"
-    arg_type = Int
+    arg_type = Float64
+    default = 2.0
     "--weights"
     help = "Path to CSV-formatted weight matrix"
     default = ""
@@ -84,8 +89,8 @@ end
     arg_type = Int
     "--p"
     help = "p for distance computation (>= 10 for infinity norm, 0 for uniform cost)"
-    arg_type = Int
-    default = 2
+    arg_type = Float64
+    default = 2.0
     range_tester = x -> x >= 0
     "--height"
     help = "Image height"
@@ -110,9 +115,9 @@ end
 end
 @add_arg_table! settings["barycenter"] begin
     "--algorithm", "-a"
-    help = "Algorithm to solve the barycenter problem. Options are: $(join(keys(ctransfer_solvers), ", "))"
-    range_tester = x -> x in keys(ctransfer_solvers)
-    default = "sinkhorn"
+    help = "Algorithm to solve the barycenter problem. Options are: $(join(barycenter_solvers, ", "))"
+    range_tester = x -> x in barycenter_solvers
+    default = "ipb"
     "--settings"
     help = "Solver configuration settings"
     default = "./test.json"
@@ -122,8 +127,8 @@ end
     arg_type = Int
     "--p"
     help = "p for distance computation (>= 10 for infinity norm, 0 for uniform cost)"
-    arg_type = Int
-    default = 2
+    arg_type = Float64
+    default = 2.0
     range_tester = x -> x >= 0
     "--weights"
     help = "Weights for Barycenter objective (default is uniform). If provided, number of weights must match the number of distributions"
@@ -223,11 +228,11 @@ function run_barycenter(parsed_args)
     locations = CuArray(locations)
     args = read_args_json(parsed_args["settings"])
     W∞ = (h - 1.0)^2 + (w - 1)^2
-    if parsed_args["algorithm"] == "sinkhorn"
-        r, mup, mun = sinkhorn_barycenter_kernel(marginals, locations, locations, W∞, args, weights, parsed_args["frequency"], parsed_args["p"])
+    if parsed_args["algorithm"] == "ipb"
+        r, mup, mun = ipb_kernel(marginals, locations, locations, W∞, args, weights, parsed_args["frequency"], parsed_args["p"])
         outname = ".duals"
     elseif parsed_args["algorithm"] == "dual_extragradient"
-        r, mup, mun = extragradient_barycenter_kernel(marginals, locations, locations, W∞, args, weights, parsed_args["frequency"], parsed_args["p"])
+        r, mup, mun = extragradient_barycenter_kernel(marginals, locations, locations, W∞, args, weights, parsed_args["frequency"], Int(parsed_args["p"]))
         outname = ".mu"
     end
     m = size(marginals, 1)

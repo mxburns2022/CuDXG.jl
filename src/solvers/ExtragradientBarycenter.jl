@@ -200,15 +200,20 @@ function extragradient_barycenter_dual(
         CUDA.synchronize()
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
+            p = [r .* softmax(-(W[k] * 0.5 * st ./ W∞[k] .+ (νt⁺[k]' .- νt⁻[k]')) ./ ηp, norm_dims=2) for k in 1:m]
+            obj = dot(w, dot(p[k], W[k]) for k in 1:m)
+            feas = sum(norm(sum(p[k], dims=1)' - c[k], 1) for k in 1:m)
+            @printf "%.6e,%d,%.14e,%.14e,extragradient_barycenter_kernel\n" elapsed_time i feas obj
             break
         end
         if i % frequency == 0
-            p = [r .* softmax(-(W[k] * 0.5 * st ./ W∞[k] .+ (ν⁺[k]' .- ν⁻[k]')) ./ ηp, norm_dims=2) for k in 1:m]
+            p = [r .* softmax(-(W[k] * 0.5 * st ./ W∞[k] .+ (νt⁺[k]' .- νt⁻[k]')) ./ ηp, norm_dims=2) for k in 1:m]
             obj = dot(w, dot(p[k], W[k]) for k in 1:m)
             feas = sum(norm(sum(p[k], dims=1)' - c[k], 1) for k in 1:m)
             @printf "%.6e,%d,%.14e,%.14e,extragradient_barycenter_kernel\n" elapsed_time i feas obj
             # sleep(0.1)
             if feas < 1e-13
+                @printf "%.6e,%d,%.14e,%.14e,extragradient_barycenter_kernel\n" elapsed_time i feas obj
                 break
             end
         end
@@ -227,7 +232,8 @@ function extragradient_barycenter_dual(
             # display(residual_storage)
             # display(c[k])
             @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺[k], μ⁻[k], μ⁺[k], μ⁻[k], residual_storage, c[k], eta_mu[k], args.eta_mu, args.B, true)
-            @cuda threads = threads blocks = linear_blocks update_μ(ν⁺[k], ν⁻[k], ν⁺[k], ν⁻[k], μt⁺[k], μt⁻[k], ηp)
+            # @cuda threads = threads blocks = linear_blocks update_μ(ν⁺[k], ν⁻[k], ν⁺[k], ν⁻[k], μt⁺[k], μt⁻[k], ηp)
+            @cuda threads = threads blocks = linear_blocks update_μ_other(ν⁺[k], ν⁻[k], ν⁺[k], ν⁻[k], μt⁺[k], μt⁻[k], νt⁺[k], νt⁻[k], ηp)
         end
         fill!(r̄, 0.0)
         for k in 1:m
@@ -244,7 +250,7 @@ function extragradient_barycenter_dual(
     return p, r, μ⁺, μ⁻, st
 end
 
-function sinkhorn_barycenter_kernel(
+function ipb_kernel(
     c::AbstractArray{TA},
     loc1::TW,
     loc2::TW,
