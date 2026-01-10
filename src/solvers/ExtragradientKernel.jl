@@ -321,12 +321,13 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
     local_id = (threadIdx().x - 1) % step
     c1 = T(0.5) * st / W∞
     invreg = one(T) / reg
+    M = size(img2, 2)
 
     smem = CuStaticSharedArray(T, 4 * smemsize)
     warpiters = smemsize ÷ warpsize()
-    Ntiles = (N) ÷ smemsize
-    warpiter_epi = (N - Ntiles * smemsize) ÷ warpsize()
-    epi_size = N - (Ntiles * smemsize + warpiter_epi * warpsize())
+    Ntiles = (M) ÷ smemsize
+    warpiter_epi = (M - Ntiles * smemsize) ÷ warpsize()
+    epi_size = M - (Ntiles * smemsize + warpiter_epi * warpsize())
     for _ in 1:N_outer
         if tid_x > N
             return
@@ -369,7 +370,7 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
             end
             # break
         end
-        if (Ntiles) * smemsize + threadIdx().x <= N
+        if (Ntiles) * smemsize + threadIdx().x <= M
             if threadIdx().x < smemsize
                 @inbounds begin
 
@@ -673,7 +674,7 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
             primal_value = η * dot(marginal1, sumvals) + dot(marginal2, 2ν⁺ .- 1) + hr
             residual_value = sum(abs.(residual_cache - marginal2))
             objective = sum(cost_cache)
-            @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, img1, img2, μ⁺, η, 1.0, W∞, p)
+            @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt_smem!(sumvals, img1, img2, μ⁺, η, 1.0, W∞)
 
             dual_value = η * dot(marginal1, sumvals) + dot(marginal2, 2μ⁺ .- 1) + hr
             # @cuda threads = threads blocks = warp_blocks residual_spp_c!(residual_cache, cost_cache, img1, img2, marginal1, μ⁺, sumvals, η, 1.0, W∞)
