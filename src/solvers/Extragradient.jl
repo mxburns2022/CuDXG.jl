@@ -411,7 +411,29 @@ function update_μ_residual(mu_plus::CuDeviceArray{R}, mu_minus::CuDeviceArray{R
 end
 
 
-function warp_logsumexp!(output::CuDeviceVector{T}, W::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, reg::T, st::T, W∞::T) where T
+function update_θ_residual(theta::CuDeviceArray{R}, theta_0::CuDeviceArray{R}, residual::CuDeviceArray{R}, c::CuDeviceArray{R}, eta_mu_i::CuDeviceArray{R}, eta_mu::R, adjust::Bool, minv::R, maxv::R) where R
+    N = size(theta, 1)
+    tid = threadIdx().x + blockDim().x * (blockIdx().x - 1)
+    if tid > N
+        return
+    end
+    @inbounds begin
+        difference = 2(residual[tid] - c[tid]) / eta_mu_i[tid]
+        thetav = theta_0[tid]
+    end
+    expv = exp(difference) * ((thetav + 1) / (1-thetav))^(1 - eta_mu)
+    theta_value_new = (expv - 1)/ (expv + 1)
+    if adjust
+        theta_value_new = clamp(theta_value_new, minv, maxv)#max(min(theta_value_new, maxv), minv)
+    end
+    @inbounds begin
+        theta[tid] = theta_value_new
+    end 
+
+    return
+end
+
+function warp_logsumexp!(output::CuDeviceVector{T}, W::CuDeviceMatrix{T}, θ::CuDeviceVector{T}, reg::T, st::T, W∞::T) where T
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
@@ -427,7 +449,7 @@ function warp_logsumexp!(output::CuDeviceVector{T}, W::CuDeviceMatrix{T}, μ⁺:
             if i + local_id > N
                 break
             end
-            value = -(0.5 * W[i+local_id, tid_x] / W∞ * st + (2μ⁺[i+local_id] - 1)) / reg
+            value = -(0.5 * W[i+local_id, tid_x] / W∞ * st + (θ[i+local_id])) / reg
             maxval = max(value, maxval)
         end
         maxval = CUDA.reduce_warp(max, maxval)
@@ -443,7 +465,7 @@ function warp_logsumexp!(output::CuDeviceVector{T}, W::CuDeviceMatrix{T}, μ⁺:
             if i + local_id > N
                 break
             end
-            value = -(0.5 * W[i+local_id, tid_x] / W∞ * st + (2μ⁺[i+local_id] - 1)) / reg
+            value = -(0.5 * W[i+local_id, tid_x] / W∞ * st + θ[i+local_id]) / reg
             local_acc += exp(value - maxval)
         end
         local_acc2 = CUDA.reduce_warp(+, local_acc)
@@ -466,7 +488,7 @@ end
     return (m, s1 * exp(m1 - m) + s2 * exp(m2 - m))
 end
 
-function warp_logsumexp_t_fused!(output::CuDeviceVector{T}, Wt::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, reg::T, st::T, Winf::T) where T
+function warp_logsumexp_t_fused!(output::CuDeviceVector{T}, Wt::CuDeviceMatrix{T}, θ::CuDeviceVector{T}, reg::T, st::T, Winf::T) where T
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
@@ -489,9 +511,9 @@ function warp_logsumexp_t_fused!(output::CuDeviceVector{T}, Wt::CuDeviceMatrix{T
             if jj > N
                 break
             end
-            # Access W as W[jj, tid_x] because we pass Wᵗ for coalesced loads
+            # Access W as W[jj, tid_x] because we pass Wᵀ for coalesced loads
             w = Wt[jj, tid_x]
-            δ = (2μ⁺[jj] - 1) * invreg
+            δ = θ[jj] * invreg
             v = -(α * w + δ)
             # online LSE update
             if v <= m_local
@@ -528,31 +550,36 @@ function warp_logsumexp_t_fused!(output::CuDeviceVector{T}, Wt::CuDeviceMatrix{T
 end
 
 
-function residual_c!(output::CuDeviceVector{T}, r::CuDeviceArray{T}, W::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, logZi::CuDeviceVector{T}, reg::T, st::T, Winf::T) where T
+function residual_c!(output::CuDeviceVector{T}, r::CuDeviceArray{T}, W::CuDeviceMatrix{T}, θ::CuDeviceVector{T}, logZi::CuDeviceVector{T}, reg::T, st::T, Winf::T) where T
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
     M = size(r, 1)
-    N = size(μ⁺, 1)
+    N = size(θ, 1)
     N_outer = Int(ceil(N / nwarps))
     local_id = (threadIdx().x - 1) % step
     for i in 1:N_outer
         if tid_x > N
             return
         end
-        diff = (2μ⁺[tid_x] - 1)
-
+        @inbounds begin
+            diff = (θ[tid_x])
+        end
         local_acc = 0.0
         for i in 1:step:M
             if i + local_id > M
                 break
             end
-            value = -(0.5 * st * W[i+local_id, tid_x] ./ Winf + diff) / reg - logZi[i+local_id]
-            local_acc += r[i+local_id] * exp(value)
+            @inbounds begin
+                value = -(0.5 * st * W[i+local_id, tid_x] ./ Winf + diff) / reg - logZi[i+local_id]
+                local_acc += r[i+local_id] * exp(value)
+            end
         end
         local_acc2 = CUDA.reduce_warp(+, local_acc)
         if local_id == 0
-            output[tid_x] = local_acc2
+            @inbounds begin
+                output[tid_x] = local_acc2
+            end
         end
         tid_x += nwarps
     end
@@ -586,7 +613,7 @@ function test_warp_logsumexp!()
     sumvals2 = CUDA.zeros(Float64, N)
     # Use transposed W for coalesced memory access in the fused kernel
     Wt = permutedims(W, (2, 1))
-    @cuda threads = threads blocks = warp_blocks warp_logsumexp_t_fused!(sumvals2, Wt, μ⁺, ηp, st, W∞)
+    @cuda threads = threads blocks = warp_blocks warp_logsumexp_t_fused!(sumvals2, Wt, θ, ηp, st, W∞)
     CUDA.synchronize()
     println(sumvals)
     println(sumvals2)
@@ -624,8 +651,8 @@ function extragradient_ot_dual(r::CuArray{R},
     W::CuArray{R},
     args::EOTArgs{R},
     frequency::Int=50;
-    _μ⁺=Nothing,
-    _μ⁻=Nothing,
+    _θ=Nothing,
+    # _μ⁻=Nothing,
     s0=0.0
 ) where {R}
     W∞ = norm(W, Inf)
@@ -633,28 +660,20 @@ function extragradient_ot_dual(r::CuArray{R},
     n = size(c, 1)
     m = size(r, 1)
     @assert size(W) == (m, n)
-    if _μ⁺ == Nothing
-        μ⁺ = CUDA.ones(R, n) * 0.5
-        μ⁻ = copy(μ⁺)
+    θ = if _θ == Nothing
+        CUDA.zeros(R, n)
     else
-        # μ⁺ = CUDA.ones(R, n) * 0.5
-        μ⁺ = copy(_μ⁺)
-        μ⁻ = copy(_μ⁻)
+        copy(_θ)
     end
     ηp = args.eta_p / 2 / W∞
     ηstep = ηp * W∞
     sumvals = CUDA.zeros(R, m)
     residual_storage = CUDA.zeros(R, (n))
-
-    μ⁻a = copy(μ⁻)
-    μ⁺a = copy(μ⁺)
-    μ⁻t = copy(μ⁻)
-    μ⁺t = copy(μ⁺)
+    ν = copy(θ)
+    ν̄ = copy(θ)
+    θ̄ = copy(θ)
     eta_mu = (c .+ args.C3 / n) ./ (args.C2)
-    μ⁺p = copy(μ⁺)
-    μ⁻p = copy(μ⁻)
-    μ⁺pa = copy(μ⁺)
-    μ⁻pa = copy(μ⁻)
+
     st = s0
 
     threads = 256
@@ -664,26 +683,35 @@ function extragradient_ot_dual(r::CuArray{R},
     warp_blocks = Int(ceil(n / div(threads, 32, RoundUp)))
     # Precompute a transposed copy for coalesced reads in the fused LSE kernel
     Wt = permutedims(W, (2, 1))
-    @inline function infeas(μ⁺, μ⁻)
-        @cuda threads = threads blocks = warp_blocks warp_logsumexp_t_fused!(sumvals, Wt, μ⁺, ηp, st, W∞)
-        @cuda threads = threads blocks = warp_blocks residual_c!(residual_storage, r, W, μ⁺, sumvals, ηp, st, W∞)
+    @inline function infeas(θ, η, s)
+        @cuda threads = threads blocks = warp_blocks warp_logsumexp_t_fused!(sumvals, Wt, θ, η, s, W∞)
+        @cuda threads = threads blocks = warp_blocks residual_c!(residual_storage, r, W, θ, sumvals, η, s, W∞)
     end
     # ηp = 0.1
+    ηt = if args.eta_p == 0 
+        1
+    else
+        ηp
+    end
+    τp = 1.
     hr = sum(neg_entropy(r))
+    minv = tanh(-args.B/2)
+    maxv = tanh(args.B/2)
     for i in 1:args.itermax
-        infeas(μ⁺p, μ⁻p)
-        @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺t, μ⁻t, μ⁺, μ⁻, residual_storage, c, eta_mu, args.eta_mu, args.B, false)
-        @cuda threads = threads blocks = linear_blocks update_μ(μ⁺pa, μ⁻pa, μ⁺p, μ⁻p, μ⁺, μ⁻, ηstep)
+        ηt_next = ηt  / (1 + τp*(ηt - ηp))
+        infeas(ν, ηt, st)
+        @cuda threads = threads blocks = linear_blocks update_θ_residual(θ̄, θ, residual_storage, c, eta_mu, args.eta_mu, false, minv, maxv)
+        ν̄ .=τp* ηt .* θ + (1-τp*ηt) .* ν
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
             break
         end
         if (i - 1) % frequency == 0
-            p = softmax(-(W * 0.5 * st / W∞ .+ (μ⁺p' .- μ⁻p')) ./ ηp, norm_dims=2)
+            p = softmax(-(W * 0.5 * st / W∞ .+ ν') ./ ηt, norm_dims=2)
             obj = dot(W, round(r .* p, r, c))
             # pr = r .* p
-            primal_value = primalv(μ⁺p, μ⁻p, st, W, W∞, ηp, r, c) + 2ηp * hr
-            dual_value = dualv(μ⁺, μ⁻, 1.0, W, W∞, ηp, r, c) + 2ηp * hr
+            primal_value = primalv((1 .+ ν)./2, (1 .- ν)./2, st, W, W∞, ηp, r, c) + 2ηp * hr
+            dual_value = dualv((1 .+ θ)./2, (1 .- θ)./2, 1.0, W, W∞, ηp, r, c) + 2ηp * hr
             # feas = norm(sum(pr, dims=1)' - c, 1)
             feas = norm(c - residual_storage, 1)
 
@@ -693,14 +721,16 @@ function extragradient_ot_dual(r::CuArray{R},
             end
         end
         # st = (1 - ηp^(2 / 3)) * st + ηp^(2 / 3)
-        st = (1 - ηstep) * st + ηstep
-        infeas(μ⁺pa, μ⁻pa)
-        @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺, μ⁻, μ⁺, μ⁻, residual_storage, c, eta_mu, args.eta_mu, args.B, true)
-        @cuda threads = threads blocks = linear_blocks update_μ(μ⁺p, μ⁻p, μ⁺p, μ⁻p, μ⁺t, μ⁻t, ηstep)
+        st = (1 - τp*ηt_next) * st + τp*ηt_next
+        infeas(ν̄, ηt_next, st)
+        @cuda threads = threads blocks = linear_blocks update_θ_residual(θ, θ, residual_storage, c, eta_mu, args.eta_mu, true, minv, maxv)
+        ν = (1-τp*ηt_next) * ν  + τp*ηt_next * θ̄
+        # axpby!(ηt_next, θ̄, (1-ηt_next), ν)
+        ηt = ηt_next
         # ηp *= 0.99
     end
-    p = softmax(-(W * 0.5 * st ./ W∞ .+ μ⁺p' .- μ⁻p') ./ ηp, norm_dims=2)
-    return r .* p, μ⁺, μ⁻, st
+    p = softmax(-(W * 0.5 * st ./ W∞ .+ ν') ./ ηp, norm_dims=2)
+    return r .* p, θ, st
 end
 
 
@@ -720,102 +750,62 @@ function extragradient_ot_dual(r::AbstractArray{R},
     ηp = args.eta_p / 2W∞
     n = size(r, 1)
 
-    μ⁺ = ones(R, n) * 0.5
+    θ = zeros(R, n)
+    ν = zeros(R, n)
+    θ̄ = zeros(R, n)
+    ν̄ = zeros(R, n)
 
     sumvals = zeros(R, n)
     residual_storage = zeros(R, n)
     maxvals = zeros(R, n)
 
-
-    μ⁻ = copy(μ⁺)
-    μ⁻a = copy(μ⁻)
-    μ⁺a = copy(μ⁺)
-    μ⁻t = copy(μ⁻)
-    μ⁺t = copy(μ⁺)
     eta_mu = (c .+ args.C3 / n) ./ (args.C2)
-    μ⁺p = copy(μ⁺)
-    μ⁻p = copy(μ⁻)
-    ηpstep = 1.0
-    μ⁺pa = copy(μ⁺)
-    μ⁻pa = copy(μ⁻)
-    μ⁻a = copy(μ⁻)
-    st = s0
+    st = 0
+    ηt = if ηp == 0 1 else ηp end
     println("time(s),iter,infeas,ot_objective,primal,dual,solver")
     time_start = time_ns()
-    function infeas(μ⁺, μ⁻)
+    function infeas(θ, ηt)
 
-        maximum!(maxvals, -(0.5W * st / W∞ .+ (μ⁺' .- μ⁻')) ./ ηp)
+        maximum!(maxvals, -(0.5W * st / W∞ .+ θ') ./ ηt)
 
-        sum!(sumvals, exp.(-(0.5W * st / W∞ .+ (μ⁺' .- μ⁻')) ./ ηp .- maxvals))
-        sum!(residual_storage', exp.(-(0.5W * st ./ W∞ .+ (μ⁺' .- μ⁻')) ./ ηp .- maxvals .- log.(sumvals) .+ log.(r)))
+        sum!(sumvals, exp.(-(0.5W * st / W∞ .+ θ') ./ ηt .- maxvals))
+        sum!(residual_storage', exp.(-(0.5W * st ./ W∞ .+ θ') ./ ηt .- maxvals .- log.(sumvals) .+ log.(r)))
         # return 
     end
     for i in 1:args.itermax
         elapsed_time = (time_ns() - time_start) / 1e9
+        ηt_new = ηt / (1+(ηt - ηp))
         if elapsed_time > args.tmax
             break
         end
 
-        infeas(μ⁺p, μ⁻p)
-        # copy!(eta_mu, residual_storage)
-        μ⁻t = μ⁻a .^ (1 - args.eta_mu) .* exp.(-(residual_storage - c) ./ eta_mu)
-        μ⁺t = μ⁺a .^ (1 - args.eta_mu) .* exp.((residual_storage - c) ./ eta_mu)
-        normv = (μ⁻t + μ⁺t)
-        μ⁻t = μ⁻t ./ normv
-        μ⁺t = μ⁺t ./ normv
 
-        μ⁺pa .= μ⁺p + ηpstep * ηp * (μ⁺a - μ⁺p)
-        μ⁻pa .= μ⁻p + ηpstep * ηp * (μ⁻a - μ⁻p)
-        normv = (μ⁺pa + μ⁻pa)
-        μ⁺pa ./= normv
-        μ⁻pa ./= normv
-
-        st = (1 - ηpstep * ηp) * st + ηpstep * ηp
-
+        infeas(ν, ηt)
+        θ̄ .=  tanh.((residual_storage - c) ./ eta_mu + 1/2 .*(1 .- args.eta_mu).*log.((θ .+ 1) ./ (1 .- θ)))
+        ν̄ .= ν + ηt * (θ - ν)
         if (i - 1) % frequency == 0
-            p = softmax(-(0.5W * st / W∞ .+ (μ⁺p' .- μ⁻p')) ./ ηp, norm_dims=2)
-            # println(p)
-            # sleep(1)
+            p = softmax(-(0.5W * st / W∞ .+ ν') ./ ηt, norm_dims=2)
             pr = r .* p
             feas = norm(sum(pr, dims=1)' - c, 1)
             obj = dot(round(pr, r, c), W)
             pobj = primalv(p, W, W∞, ηp, r, c)
-            dobj = dualv(μ⁺, μ⁻, 1.0, W, W∞, ηp, r, c)
+            dobj = dualv((1 .+θ)/2, (1 .- θ)/2, 1.0, W, W∞, ηp, r, c)
             @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,dual_extrap\n" elapsed_time i feas obj pobj dobj
             if (pobj - dobj) < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
         end
+        st = (1 - ηt_new) * st + ηt_new
 
 
-        infeas(μ⁺pa, μ⁻pa)
-        μ⁻ = μ⁻a .^ (1 - args.eta_mu) .* exp.(-(residual_storage - c) ./ eta_mu)#(sum(r .* pt, dims=1)' - c))
-        μ⁺ = μ⁺a .^ (1 - args.eta_mu) .* exp.((residual_storage - c) ./ eta_mu)
-        normv = (μ⁻ + μ⁺)
-        μ⁻ ./= normv
-        μ⁺ ./= normv
-
-        μ⁺p = μ⁺p + ηpstep * ηp * (μ⁺t - μ⁺p)
-        μ⁻p = μ⁻p + ηpstep * ηp * (μ⁻t - μ⁻p)
-        # μ⁺p = μ⁺p + ηpstep * ηp * (μ⁺t - μ⁺pa)
-        # μ⁻p = μ⁻p + ηpstep * ηp * (μ⁻t - μ⁻pa)
-
-        normv = (μ⁺p + μ⁻p)
-        μ⁺p ./= normv
-        μ⁻p ./= normv
-
-        μ⁻a = max.(μ⁻, exp(-args.B) .* max.(μ⁺, μ⁻))
-        μ⁺a = max.(μ⁺, exp(-args.B) .* max.(μ⁺, μ⁻))
-        normv = (μ⁻a + μ⁺a)
-
-        μ⁻a = μ⁻a ./ normv
-        μ⁺a = μ⁺a ./ normv
-        # println(norm(μ⁺a - μ⁺) + norm(μ⁻a - μ⁻))
-
+        infeas(ν̄, ηt_new)
+        θ .=  tanh.((residual_storage - c) ./ eta_mu + 1/2 .*(1 .- args.eta_mu).*log.((θ .+ 1) ./ (1 .- θ)))
+        clamp!(θ, tanh(-args.B/2), tanh(args.B/2))
+        ν .= ν + ηt * (θ̄ - ν)
+        ηt = ηt_new
     end
-    p = softmax(-(0.5W / W∞ .+ (μ⁺' .- μ⁻')) ./ ηp, norm_dims=2)
-    sumvals = logsumexp(-(0.5W / W∞ .+ (μ⁺' .- μ⁻')) ./ ηp, 2)
-    return r .* p, μ⁺, μ⁻, sumvals
+    p = softmax(-(0.5W*st / W∞ .+ ν') ./ηt, norm_dims=2)
+    return r .* p, θ
 end
 function papc_eot_dual(r::AbstractArray{R},
     c::AbstractArray{R},
@@ -980,7 +970,7 @@ function papc_ot_dual(r::AbstractArray{R},
     # W /= W∞
     # W∞ = 0.5
     W∞  = 1
-    μ⁺ = CUDA.ones(R, n) * 0.5
+    θ = CUDA.zeros(R, n)
 
     sumvals = CUDA.zeros(R, m)
     residual_storage = CUDA.zeros(R, n)
@@ -992,7 +982,7 @@ function papc_ot_dual(r::AbstractArray{R},
     μ⁺a = copy(μ⁺)
     μ⁻t = copy(μ⁻)
     μ⁺t = copy(μ⁺)
-    eta_mu = (c .+ args.C3 / n) ./ (2.0)
+    eta_mu = (c .+ args.C3 / n) ./ (args.C2)
     μ⁺p = copy(μ⁺)
     μ⁻p = copy(μ⁻)
     # ηpstep = 2.0
