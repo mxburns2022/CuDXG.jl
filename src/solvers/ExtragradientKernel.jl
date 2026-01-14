@@ -312,7 +312,7 @@ end
 
 const smemsize = 256
 function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
-    img2::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, reg::T, st::T, W∞::T) where T
+    img2::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, reg::T, st::T, W∞::T, p::R) where {T, R}
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
@@ -639,7 +639,7 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
     threads = 256
     warp_blocks = div(N, div(threads, 32, RoundDown), RoundUp)
     linear_blocks = div(N, threads, RoundUp)
-    @cuda threads = threads blocks = warp_blocks max_logsumexp_spp_ct!(sumvals, img1, img2)
+    @cuda threads = threads blocks = warp_blocks max_logsumexp_spp_ct!(sumvals, img1, img2, p)
     CUDA.synchronize()
     W∞ = maximum(sumvals)
     println(W∞)
@@ -674,7 +674,7 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
             primal_value = η * dot(marginal1, sumvals) + dot(marginal2, 2ν⁺ .- 1) + hr
             residual_value = sum(abs.(residual_cache - marginal2))
             objective = sum(cost_cache)
-            @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt_smem!(sumvals, img1, img2, μ⁺, η, 1.0, W∞)
+            @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_opt!(sumvals, img1, img2, μ⁺, η, 1.0, W∞, p)
 
             dual_value = η * dot(marginal1, sumvals) + dot(marginal2, 2μ⁺ .- 1) + hr
             # @cuda threads = threads blocks = warp_blocks residual_spp_c!(residual_cache, cost_cache, img1, img2, marginal1, μ⁺, sumvals, η, 1.0, W∞)
