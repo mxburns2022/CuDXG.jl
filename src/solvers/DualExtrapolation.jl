@@ -1,21 +1,3 @@
-using PythonOT
-include("src/Utilities.jl")
-include("src/solvers/Extragradient.jl")
-using LinearAlgebra
-using Random
-using CUDA
-
-# function r(x,y,A,maxA)
-#   term1 = x'*A*(y.^2)
-#   term2 = 10 * maxA * x'*log.(x + 1e-20)
-#   return term1 + term2
-# end
-
-
-# function g(x,y,A,b,c)
-#   return [A*y + c; -A'*x + b]
-# end
-
 
 function DualExtrapolation(W::TW, r::TM, c::TM, args::EOTArgs, frequency::Int=100) where {TW<:AbstractMatrix, TM<:AbstractVector}
   n = size(r, 1)
@@ -77,45 +59,3 @@ function DualExtrapolation(W::TW, r::TM, c::TM, args::EOTArgs, frequency::Int=10
   end
   return x̂, ŷ, ẑ
 end
-
-
-n = 10
-N = n * n
-m = 10
-M = m * m
-# N = 5
-# M = 5
-M = 10
-N = 10
-rng = Xoshiro(0)
-r, c, W, optimum = generate_random_ot(N, M, rng)
-c .+= 1e-6
-r .+= 1e-6
-normalize!(r, 1)
-normalize!(c, 1)
-# fill!(c, 0.0)
-# c[1] = 1.0
-# c .+= 1e-5
-# normalize!(c, 1)
-# fill!(r, 0.0)
-# r[2] = 1.0
-# r .+= 1e-6
-# normalize!(, 1)
-# W = get_euclidean_distance(n, n, p=1.)
-# W /= norm(W, Inf)
-# r, c, W = map(CuArray, [r, c, W])
-args = EOTArgs(itermax=100000, epsilon=1e-6, eta_p=1.)
-# ACMirrorProxDual(W, r, c, args)
-args = EOTArgs(itermax=2, epsilon=1e-8, eta_p=1e-5, eta_mu=1e-10, B=1.1)
-# prototype_extragradient_ot2(r, c, W, args)
-W /= norm(W, Inf)
-# extragradient_ot_dual(r, c, W, args)
-args = EOTArgs(itermax=200000, epsilon=1e-4, eta_p=0.0, eta_mu=0.0, B=2.0, tau_p = 0.5, tau_mu = 0.3, inner_iter=20)
-DualExtrapolation(W, r, c, args)
-r, c, W = map(Array, [r, c, W])
-
-println(emd2(r, c, W))
-# prototype_extragradient_ot(r, c, W, args)
-# prototype_extragradient_ot(r, c, W, args)
-# papc_ot_dual(r, c, W, args)
-# extragradient_ot_dual(r, c, W, args)

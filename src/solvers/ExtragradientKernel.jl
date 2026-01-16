@@ -42,8 +42,12 @@ function residual_spp_c!(output::CuDeviceVector{T}, cost_output::CuDeviceVector{
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
                 value = muladd(muladd(l2dist, c1, diff), -invreg, -logZi[j+local_id])
             end
@@ -63,8 +67,12 @@ function residual_spp_c!(output::CuDeviceVector{T}, cost_output::CuDeviceVector{
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
                 value = muladd(muladd(l2dist, c1, diff), -invreg, -logZi[j+local_id])
             end
@@ -113,8 +121,12 @@ function naive_findmaxindex_spp_ct!(output_img::CuDeviceMatrix{T}, img1::CuDevic
         db = (pix1b - pix2b)
         if p == 1
             l2dist = abs(dr) + abs(dg) + abs(db)
-        else
+        elseif p == 2
             l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+        elseif p == Inf
+            l2dist = max(abs(dr), max(abs(dg), abs(db)))
+        else
+            l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
         end
         prob = exp(-(l2dist * st / 2W∞ + diff) / (reg / 2W∞) - norm)
         avgr += img2[1, i] * prob
@@ -156,8 +168,12 @@ function naive_findmaxindex_spp_ct_t!(output_img::CuDeviceMatrix{T}, img1::CuDev
         db = (pix1b - pix2b)
         if p == 1
             l2dist = abs(dr) + abs(dg) + abs(db)
-        else
+        elseif p == 2
             l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+        elseif p == Inf
+            l2dist = max(abs(dr), max(abs(dg), abs(db)))
+        else
+            l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
         end
         prob = exp(-(l2dist * st / 2W∞ + diff) / (reg  / 2W∞) - norm) * ri
         avgr += img1[1, i] * prob
@@ -211,63 +227,70 @@ function update_θ_residual_ct(theta::CuDeviceArray{R}, theta_0::CuDeviceArray{R
     
     return
 end
-function warp_logsumexp_spp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
-    img2::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, reg::T, st::T, W∞::T) where T
-    step = warpsize()
-    nwarps = (gridDim().x * blockDim().x) ÷ step
-    tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
+
+function naive_logsumexp_spp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
+    img2::CuDeviceMatrix{T}, θ::CuDeviceVector{T}, reg::T, st::T, W∞::T, p::R) where {T, R}
+    tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) + 1
     N = size(img1, 2)
-    M = size(img2, 2)
-    N_outer = Int(ceil(N / nwarps))
-    local_id = (threadIdx().x - 1) % step
-    for i in 1:N_outer
-        if tid_x > N
-            return
-        end
-        pix1r = img1[1, tid_x]
-        pix1g = img1[2, tid_x]
-        pix1b = img1[3, tid_x]
-        maxval = -Inf
-        for i in 1:step:M
-            if i + local_id > M
-                break
-            end
-            pix2r = img2[1, i+local_id]
-            pix2g = img2[2, i+local_id]
-            pix2b = img2[3, i+local_id]
-
-            l2dist = abs(pix1r - pix2r) + abs(pix1g - pix2g) + abs(pix1b - pix2b)
-            # l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-            value = -(l2dist * 0.5 * st / W∞ + (2μ⁺[i+local_id] - 1.)) / reg
-            maxval = max(value, maxval)
-        end
-        maxval = CUDA.reduce_warp(max, maxval)
-        if local_id == 0
-            output[tid_x] = maxval
-        end
-        sync_warp()
-        maxval = output[tid_x]
-
-        local_acc = 0.0
-        for i in 1:step:M
-            if i + local_id > M
-                break
-            end
-            pix2r = img2[1, i+local_id]
-            pix2g = img2[2, i+local_id]
-            pix2b = img2[3, i+local_id]
-
-            l2dist = abs(pix1r - pix2r) + abs(pix1g - pix2g) + abs(pix1b - pix2b)
-            # l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-            value = -(l2dist * 0.5 * st / W∞ + (2μ⁺[i+local_id] - 1.)) / reg
-            local_acc += exp(value - maxval)
-        end
-        local_acc2 = CUDA.reduce_warp(+, local_acc)
-        if local_id == 0
-            output[tid_x] = (log(local_acc2) + maxval)
-        end
-        tid_x += nwarps
+    if tid_x > N
+        return
     end
+    M = size(img2, 2)
+    pix1r = img1[1, tid_x]
+    pix1g = img1[2, tid_x]
+    pix1b = img1[3, tid_x]
+    maxval = -Inf
+    for i in 1:M
+        
+        @inbounds begin
+            pix2r = img2[1, i]
+            pix2g = img2[2, i]
+            pix2b = img2[3, i]
+        end
+
+        dr = (pix1r - pix2r)
+        dg = (pix1g - pix2g)
+        db = (pix1b - pix2b)
+        if p == 1
+            l2dist = abs(dr) + abs(dg) + abs(db)
+        elseif p == 2
+            l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+        elseif p == Inf
+            l2dist = max(abs(dr), max(abs(dg), abs(db)))
+        else
+            l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+        end
+        # l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
+        value = -(l2dist * st + (2W∞*θ[i])) / reg
+        maxval = max(value, maxval)
+    end
+
+    local_acc = 0.0
+    for i in 1:M
+        @inbounds begin
+            pix2r = img2[1, i]
+            pix2g = img2[2, i]
+            pix2b = img2[3, i]
+        end
+
+        dr = (pix1r - pix2r)
+        dg = (pix1g - pix2g)
+        db = (pix1b - pix2b)
+        if p == 1
+            l2dist = abs(dr) + abs(dg) + abs(db)
+        elseif p == 2
+            l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+        elseif p == Inf
+            l2dist = max(abs(dr), max(abs(dg), abs(db)))
+        else
+            l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+        end
+        # l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
+        value = -(l2dist * st + (2W∞*θ[i])) / reg
+        local_acc += exp(value - maxval)
+    end
+    output[tid_x] = (log(local_acc) + maxval)
+    
     return
 end
 function max_logsumexp_spp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T}, img2::CuDeviceMatrix{T}, p::Float64) where T
@@ -293,10 +316,17 @@ function max_logsumexp_spp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T
             pix2r = img2[1, i+local_id]
             pix2g = img2[2, i+local_id]
             pix2b = img2[3, i+local_id]
+            dr = (pix1r - pix2r)
+            dg = (pix1g - pix2g)
+            db = (pix1b - pix2b)
             if p == 1
-                l2dist = abs(pix1r - pix2r) + abs(pix1g - pix2g) + abs(pix1b - pix2b)
+                l2dist = abs(dr) + abs(dg) + abs(db)
+            elseif p == 2
+                l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+            elseif p == Inf
+                l2dist = max(abs(dr), max(abs(dg), abs(db)))
             else
-                l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
+                l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
             end
             # l2dist = abs(pix1r - pix2r) + abs(pix1g - pix2g) + abs(pix1b - pix2b)
 
@@ -314,15 +344,15 @@ end
 
 const smemsize = 256
 function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
-    img2::CuDeviceMatrix{T}, μ⁺::CuDeviceVector{T}, reg::T, st::T, W∞::T) where T
+    img2::CuDeviceMatrix{T}, θ::CuDeviceVector{T}, reg::T, st::T, W∞::T, p::R) where {T, R}
     step = warpsize()
     nwarps = (gridDim().x * blockDim().x) ÷ step
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
     N = size(img1, 2)
     N_outer = Int(ceil(N / nwarps))
     local_id = (threadIdx().x - 1) % step
-    c1 = T(0.5) * st / W∞
-    invreg = one(T) / reg
+    c1 = st / 2W∞
+    invreg = one(T) / (reg / 2W∞)
     M = size(img2, 2)
 
     smem = CuStaticSharedArray(T, 4 * smemsize)
@@ -330,6 +360,7 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
     Ntiles = (M) ÷ smemsize
     warpiter_epi = (M - Ntiles * smemsize) ÷ warpsize()
     epi_size = M - (Ntiles * smemsize + warpiter_epi * warpsize())
+
     for _ in 1:N_outer
         if tid_x > N
             return
@@ -347,7 +378,7 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
                     smem[threadIdx().x] = img2[1, blocktile*smemsize+threadIdx().x]
                     smem[threadIdx().x+smemsize] = img2[2, blocktile*smemsize+threadIdx().x]
                     smem[threadIdx().x+2smemsize] = img2[3, blocktile*smemsize+threadIdx().x]
-                    smem[threadIdx().x+3smemsize] = 2μ⁺[blocktile*smemsize+threadIdx().x] - 1
+                    smem[threadIdx().x+3smemsize] = θ[blocktile*smemsize+threadIdx().x]
                 end
             end
             sync_threads()
@@ -362,15 +393,21 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
                     dr = (pix1r - pix2r)
                     dg = (pix1g - pix2g)
                     db = (pix1b - pix2b)
-                    l2dist = abs(dr) + abs(dg) + abs(db)
-                    # l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                    # l2dist = abs(dr) + abs(dg) + abs(db)
+                    if p == 1
+                        l2dist = abs(dr) + abs(dg) + abs(db)
+                    elseif p == 2
+                        l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                    elseif p == Inf
+                        l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                    else
+                        l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                    end
                     value = -(muladd(l2dist, c1, muval)) * invreg
                     # end
                     maxval = max(maxval, value)
                 end
-                # break
             end
-            # break
         end
         if (Ntiles) * smemsize + threadIdx().x <= M
             if threadIdx().x < smemsize
@@ -379,7 +416,7 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
                     smem[threadIdx().x] = img2[1, Ntiles*smemsize+threadIdx().x]
                     smem[threadIdx().x+smemsize] = img2[2, Ntiles*smemsize+threadIdx().x]
                     smem[threadIdx().x+2smemsize] = img2[3, Ntiles*smemsize+threadIdx().x]
-                    smem[threadIdx().x+3smemsize] = μ⁺[Ntiles*smemsize+threadIdx().x]
+                    smem[threadIdx().x+3smemsize] = θ[Ntiles*smemsize+threadIdx().x]
                 end
             end
         end
@@ -396,8 +433,12 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
                 value = -(muladd(l2dist, c1, muval)) * invreg
             end
@@ -415,8 +456,12 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
                 value = -(muladd(l2dist, c1, muval)) * invreg
                 maxval = max(value, maxval)
@@ -432,7 +477,7 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
                     smem[threadIdx().x] = img2[1, blocktile*smemsize+threadIdx().x]
                     smem[threadIdx().x+smemsize] = img2[2, blocktile*smemsize+threadIdx().x]
                     smem[threadIdx().x+2smemsize] = img2[3, blocktile*smemsize+threadIdx().x]
-                    smem[threadIdx().x+3smemsize] = 2μ⁺[blocktile*smemsize+threadIdx().x] - 1
+                    smem[threadIdx().x+3smemsize] = θ[blocktile*smemsize+threadIdx().x]
                 end
             end
             sync_threads()
@@ -447,8 +492,15 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
                     dr = (pix1r - pix2r)
                     dg = (pix1g - pix2g)
                     db = (pix1b - pix2b)
-                    l2dist = abs(dr) + abs(dg) + abs(db)
-                    # l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                    if p == 1
+                        l2dist = abs(dr) + abs(dg) + abs(db)
+                    elseif p == 2
+                        l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                    elseif p == Inf
+                        l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                    else
+                        l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                    end
                     value = -(muladd(l2dist, c1, muval)) * invreg
                     local_acc += exp(value - maxval)
                 end
@@ -461,11 +513,12 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
                     smem[threadIdx().x] = img2[1, Ntiles*smemsize+threadIdx().x]
                     smem[threadIdx().x+smemsize] = img2[2, Ntiles*smemsize+threadIdx().x]
                     smem[threadIdx().x+2smemsize] = img2[3, Ntiles*smemsize+threadIdx().x]
-                    smem[threadIdx().x+3smemsize] = μ⁺[Ntiles*smemsize+threadIdx().x]
+                    smem[threadIdx().x+3smemsize] = θ[Ntiles*smemsize+threadIdx().x]
                 end
             end
         end
         sync_threads()
+        j = 0
         for tile in 0:warpiter_epi-1
             j = tile * warpsize()
             @inbounds begin
@@ -478,8 +531,12 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
                 value = -(muladd(l2dist, c1, muval)) * invreg
             end
@@ -497,8 +554,12 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
                 value = -(muladd(l2dist, c1, muval)) * invreg
             end
@@ -508,6 +569,174 @@ function warp_logsumexp_spp_ct_opt_smem!(output::CuDeviceVector{T}, img1::CuDevi
         if local_id == 0
             @inbounds begin
                 output[tid_x] = log(local_acc) + maxval
+            end
+        end
+        tid_x += nwarps
+    end
+    return
+end
+
+function warp_logsumexp_spp_ct_opt_smem_fused!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
+    img2::CuDeviceMatrix{T}, θ::CuDeviceVector{T}, reg::T, st::T, W∞::T, p::R) where {T, R}
+    step = warpsize()
+    nwarps = (gridDim().x * blockDim().x) ÷ step
+    tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
+    N = size(img1, 2)
+    N_outer = Int(ceil(N / nwarps))
+    local_id = (threadIdx().x - 1) % step
+    c1 = st / 2W∞
+    invreg = one(T) / (reg / 2W∞)
+    M = size(img2, 2)
+
+    smem = CuStaticSharedArray(T, 4 * smemsize)
+    warpiters = smemsize ÷ warpsize()
+    Ntiles = (M) ÷ smemsize
+    warpiter_epi = (M - Ntiles * smemsize) ÷ warpsize()
+    epi_size = M - (Ntiles * smemsize + warpiter_epi * warpsize())
+
+    for _ in 1:N_outer
+        if tid_x > N
+            return
+        end
+        @inbounds begin
+            pix1r = img1[1, tid_x]
+            pix1g = img1[2, tid_x]
+            pix1b = img1[3, tid_x]
+        end
+        m_local = -Inf
+        s_local = 0.0
+        for blocktile in 0:Ntiles-1
+            if threadIdx().x <= smemsize
+                @inbounds begin
+                    smem[threadIdx().x] = img2[1, blocktile*smemsize+threadIdx().x]
+                    smem[threadIdx().x+smemsize] = img2[2, blocktile*smemsize+threadIdx().x]
+                    smem[threadIdx().x+2smemsize] = img2[3, blocktile*smemsize+threadIdx().x]
+                    smem[threadIdx().x+3smemsize] = θ[blocktile*smemsize+threadIdx().x]
+                end
+            end
+            sync_threads()
+            for tile in 0:warpiters-1
+                @inbounds begin
+                    j = tile * warpsize()
+                    pix2r = smem[j+local_id+1]
+                    pix2g = smem[j+local_id+smemsize+1]
+                    pix2b = smem[j+local_id+2smemsize+1]
+                    muval = smem[j+local_id+3smemsize+1]
+
+                    dr = (pix1r - pix2r)
+                    dg = (pix1g - pix2g)
+                    db = (pix1b - pix2b)
+                    # l2dist = abs(dr) + abs(dg) + abs(db)
+                    if p == 1
+                        l2dist = abs(dr) + abs(dg) + abs(db)
+                    elseif p == 2
+                        l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                    elseif p == Inf
+                        l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                    else
+                        l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                    end
+                    v = -(muladd(l2dist, c1, muval)) * invreg
+                    # end
+                    if v <= m_local
+                        s_local += exp(v - m_local)
+                    else
+                        s_local = s_local * exp(m_local - v) + one(T)
+                        m_local = v
+                    end
+                end
+            end
+        end
+        if (Ntiles) * smemsize + threadIdx().x <= M
+            if threadIdx().x < smemsize
+                @inbounds begin
+
+                    smem[threadIdx().x] = img2[1, Ntiles*smemsize+threadIdx().x]
+                    smem[threadIdx().x+smemsize] = img2[2, Ntiles*smemsize+threadIdx().x]
+                    smem[threadIdx().x+2smemsize] = img2[3, Ntiles*smemsize+threadIdx().x]
+                    smem[threadIdx().x+3smemsize] = θ[Ntiles*smemsize+threadIdx().x]
+                end
+            end
+        end
+        sync_threads()
+
+        for tile in 0:warpiter_epi-1
+            j = tile * warpsize()
+            @inbounds begin
+                pix2r = smem[j+local_id+1]
+                pix2g = smem[j+local_id+smemsize+1]
+                pix2b = smem[j+local_id+2smemsize+1]
+                muval = smem[j+local_id+3smemsize+1]
+                dr = (pix1r - pix2r)
+                dg = (pix1g - pix2g)
+                db = (pix1b - pix2b)
+                if p == 1
+                    l2dist = abs(dr) + abs(dg) + abs(db)
+                elseif p == 2
+                    l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                end
+            end
+            v = -(muladd(l2dist, c1, muval)) * invreg
+                # end
+            if v <= m_local
+                s_local += exp(v - m_local)
+            else
+                s_local = s_local * exp(m_local - v) + one(T)
+                m_local = v
+            end
+            
+        end
+        # sync_threads()
+        # if local_id <= epi_size
+        #     @inbounds begin
+        #         pix2r = smem[local_id+1]
+        #         pix2g = smem[local_id+smemsize+1]
+        #         pix2b = smem[local_id+2smemsize+1]
+        #         muval = smem[local_id+3smemsize+1]
+        #         dr = (pix1r - pix2r)
+        #         dg = (pix1g - pix2g)
+        #         db = (pix1b - pix2b)
+        #         if p == 1
+        #             l2dist = abs(dr) + abs(dg) + abs(db)
+        #         elseif p == 2
+        #             l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+        #         elseif p == Inf
+        #             l2dist = max(abs(dr), max(abs(dg), abs(db)))
+        #         else
+        #             l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+        #         end
+        #         v = -(muladd(l2dist, c1, muval)) * invreg
+        #         # end
+        #         if v <= m_local
+        #             s_local += exp(v - m_local)
+        #         else
+        #             s_local = s_local * exp(m_local - v) + one(T)
+        #             m_local = v
+        #         end
+        #     end
+        # end
+        m = shfl_down_sync(0xffffffff, m_local, 16)
+        s = shfl_down_sync(0xffffffff, s_local, 16)
+        m_local, s_local = _lse_pair_combine((m_local, s_local), (m, s))
+        m = shfl_down_sync(0xffffffff, m_local, 8)
+        s = shfl_down_sync(0xffffffff, s_local, 8)
+        m_local, s_local = _lse_pair_combine((m_local, s_local), (m, s))
+        m = shfl_down_sync(0xffffffff, m_local, 4)
+        s = shfl_down_sync(0xffffffff, s_local, 4)
+        m_local, s_local = _lse_pair_combine((m_local, s_local), (m, s))
+        m = shfl_down_sync(0xffffffff, m_local, 2)
+        s = shfl_down_sync(0xffffffff, s_local, 2)
+        m_local, s_local = _lse_pair_combine((m_local, s_local), (m, s))
+        m = shfl_down_sync(0xffffffff, m_local, 1)
+        s = shfl_down_sync(0xffffffff, s_local, 1)
+        m, s = _lse_pair_combine((m_local, s_local), (m, s))
+        if local_id == 0
+            @inbounds begin
+                output[tid_x] = log(s) + m
             end
         end
         tid_x += nwarps
@@ -547,8 +776,12 @@ function warp_logsumexp_spp_ct_opt!(output::CuDeviceVector{T}, img1::CuDeviceMat
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
                 value = -(muladd(l2dist, c1, muval)) * invreg
             end
@@ -566,8 +799,12 @@ function warp_logsumexp_spp_ct_opt!(output::CuDeviceVector{T}, img1::CuDeviceMat
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
                 value = -(muladd(l2dist, c1, muval)) * invreg
             end
@@ -589,8 +826,12 @@ function warp_logsumexp_spp_ct_opt!(output::CuDeviceVector{T}, img1::CuDeviceMat
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
                 value = -(muladd(l2dist, c1, muval)) * invreg
             end
@@ -609,8 +850,12 @@ function warp_logsumexp_spp_ct_opt!(output::CuDeviceVector{T}, img1::CuDeviceMat
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
                 value = -(muladd(l2dist, c1, muval)) * invreg
             end
@@ -663,8 +908,13 @@ function warp_logsumexp_spp_ct_fused!(output::CuDeviceVector{T}, img1::CuDeviceM
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
             end
             v = -(muladd(l2dist, c1, muval)) * invreg
@@ -675,7 +925,7 @@ function warp_logsumexp_spp_ct_fused!(output::CuDeviceVector{T}, img1::CuDeviceM
                 m_local = v
             end
         end
-        if (Ntiles) * warpsize() + local_id < M
+        if (Ntiles) * warpsize() + local_id <= M
             j = (Ntiles) * warpsize() + 1
             @inbounds begin
                 pix2r = img2[1, j+local_id]
@@ -687,8 +937,12 @@ function warp_logsumexp_spp_ct_fused!(output::CuDeviceVector{T}, img1::CuDeviceM
                 db = (pix1b - pix2b)
                 if p == 1
                     l2dist = abs(dr) + abs(dg) + abs(db)
-                else
+                elseif p == 2
                     l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
             end
             v = -(muladd(l2dist, c1, muval)) * invreg
@@ -724,6 +978,84 @@ function warp_logsumexp_spp_ct_fused!(output::CuDeviceVector{T}, img1::CuDeviceM
 end
 
 
+function warp_min_reduce!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
+    img2::CuDeviceMatrix{T}, θ::CuDeviceVector{T}, W∞::T, p::Float64) where T
+    step = warpsize()
+    nwarps = (gridDim().x * blockDim().x) ÷ step
+    tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
+    N = size(img1, 2)
+    M = size(img2, 2)
+    N_outer = Int(ceil(N / nwarps))
+    local_id = (threadIdx().x - 1) % step
+    Ntiles = (M) ÷ step
+    c1 = 2W∞
+    for _ in 1:N_outer
+        if tid_x > N
+            return
+        end
+        pix1r = img1[1, tid_x]
+        pix1g = img1[2, tid_x]
+        pix1b = img1[3, tid_x]
+        m_local = T(Inf)
+        
+        for tile in 0:Ntiles-1
+            j = tile * warpsize() + 1
+            @inbounds begin
+                pix2r = img2[1, j+local_id]
+                pix2g = img2[2, j+local_id]
+                pix2b = img2[3, j+local_id]
+                muval = θ[j+local_id]
+                dr = (pix1r - pix2r)
+                dg = (pix1g - pix2g)
+                db = (pix1b - pix2b)
+                if p == 1
+                    l2dist = abs(dr) + abs(dg) + abs(db)
+                elseif p == 2
+                    l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                end
+            end
+            v = muladd(muval, c1, l2dist)
+            m_local = min(v, m_local)
+        end
+        if (Ntiles) * warpsize() + local_id < M
+            j = (Ntiles) * warpsize() + 1
+            @inbounds begin
+                pix2r = img2[1, j+local_id]
+                pix2g = img2[2, j+local_id]
+                pix2b = img2[3, j+local_id]
+                muval = θ[j+local_id]
+                dr = (pix1r - pix2r)
+                dg = (pix1g - pix2g)
+                db = (pix1b - pix2b)
+                if p == 1
+                    l2dist = abs(dr) + abs(dg) + abs(db)
+                elseif p == 2
+                    l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                end
+            end
+            v = muladd(muval, c1, l2dist)
+            m_local = min(v, m_local)
+        end
+        # Warp-level reduction of (m,s)
+        m = CUDA.reduce_warp(min, m_local)
+        if local_id == 0
+            output[tid_x] = m
+        end
+        tid_x += nwarps
+    end
+    return
+end
+
+
 function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::CuArray{T}, marginal2::CuArray{T}, args::EOTArgs, frequency::Int=100, normalize_cost::Bool=false, p::Float64=2.0) where T<:Real
     N = size(img1, 2)
     M = size(img2, 2)
@@ -741,7 +1073,7 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
     W∞ = maximum(sumvals)
     η = T(args.eta_p / 2)
 
-    eta_mu = (marginal2 .+ T(args.C3) / N) / args.C2
+    eta_mu = (marginal2 .+ T(args.alpha) / N) / args.tau_mu
     time_start = time_ns()
     st = T(0.0)
     # sleep(5)
@@ -777,10 +1109,18 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
     else
         η
     end
-    W∞_scaling = (W∞)^p
-    img1 ./= (W∞_scaling)^(1/p)
-    img2 ./= (W∞_scaling)^(1/p)
-    W∞ = W∞/W∞_scaling#1.0
+    if p != Inf
+        W∞_scaling = (W∞)^p
+        img1 ./= (W∞_scaling)^(1/p)
+        img2 ./= (W∞_scaling)^(1/p)
+        W∞ = W∞/W∞_scaling#1.0
+    else
+        W∞_scaling = 1.0
+        # img1 ./= (W∞_scaling)^(1/p)
+        # img2 ./= (W∞_scaling)^(1/p)
+        # W∞ = W∞/W∞_scaling#1.0
+    end
+    
     st = if args.eta_p == 0
         1.0
     else
@@ -798,12 +1138,18 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
         if args.verbose && (i - 1) % frequency == 0
             infeas(ν, ηt, st)
             CUDA.synchronize()
-            primal_value = ηt * dot(marginal1, sumvals) + dot(marginal2, ν) + hr
             residual_value = sum(abs.(residual_cache - marginal2))
             objective = W∞_scaling*sum(cost_cache)
-            @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_fused!(sumvals, img1, img2, θ, ηt, 1.0, W∞, p)
+            if η > 0
+                primal_value = ηt * dot(marginal1, sumvals) + dot(marginal2, ν) + hr
+                @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_ct_fused!(sumvals, img1, img2, θ, η, 1.0, W∞, p)
+                dual_value = ηt * dot(marginal1, sumvals) + dot(marginal2, θ) + hr
+            else
+                primal_value = objective + 2W∞*residual_value
+                @cuda threads = threads blocks = warp_blocks warp_min_reduce!(sumvals, img1, img2, θ, W∞, p)
+                dual_value = dot(marginal1, sumvals) - 2W∞ * dot(marginal2, θ)
+            end
 
-            dual_value = ηt * dot(marginal1, sumvals) + dot(marginal2, θ) + hr
             # @cuda threads = threads blocks = warp_blocks residual_spp_c!(residual_cache, cost_cache, img1, img2, marginal1, μ⁺, sumvals, η, 1.0, W∞)
             CUDA.synchronize()
             # objective_dual = sum(cost_cache) / W∞
