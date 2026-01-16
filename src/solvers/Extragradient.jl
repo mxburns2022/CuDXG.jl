@@ -471,6 +471,8 @@ function test_warp_logsumexp!()
 
 end
 
+
+
 # +-------------------------+
 # |   This one brings joy   |
 # +-------------------------+
@@ -540,6 +542,16 @@ function extragradient_ot_dual(r::CuArray{R},
         if elapsed_time > args.tmax
             break
         end
+        if args.eta_p == 0
+            ηp = 1 / (i)
+        end
+        # st = (1 - ηp^(2 / 3)) * st + ηp^(2 / 3)
+        st = (1 - ηp) * st + ηp
+        infeas(μ⁺pa, μ⁻pa, ηp)
+        @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺, μ⁻, μ⁺, μ⁻, residual_storage, c, eta_mu, args.eta_mu, args.B, true)
+        @cuda threads = threads blocks = linear_blocks update_μ(μ⁺p, μ⁻p, μ⁺p, μ⁻p, μ⁺t, μ⁻t, ηp)
+        # ηp *= 0.99
+
         if (i - 1) % frequency == 0
             p = softmax(-(W * 0.5 * st / W∞ .+ ν') ./ ηt, norm_dims=2)
             obj = dot(W, round(r .* p, r, c))
@@ -547,7 +559,7 @@ function extragradient_ot_dual(r::CuArray{R},
             primal_value = primalv((1 .+ ν)./2, (1 .- ν)./2, st, W, W∞, ηt, ηp, r, c) + 2ηp * hr
             dual_value = dualv(θ, 1.0, W, W∞, ηp, r, c)
             # feas = norm(sum(pr, dims=1)' - c, 1)
-            feas = norm(c - residual_storage, 1)
+            feas = norm(c - sum((r.*p)', dims=2) , 1)
 
             @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragrad_dual_cuda\n" elapsed_time i feas obj primal_value dual_value
             if feas < args.epsilon / 2 && primal_value - dual_value < args.epsilon / 2
