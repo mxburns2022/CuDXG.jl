@@ -175,8 +175,8 @@ function extragradient_barycenter_dual(
     sumvals = CUDA.zeros(R, n)
     maxvals = CUDA.zeros(R, n)
     residual_storage = CUDA.zeros(R, n)
-    eta_mu = [1 ./ (args.C2 ./ (c[k] .+ args.C3 / n)) for k in 1:m]
-
+    eta_mu = [1 ./ (1. ./ (c[k] .+ args.alpha / n) ./ args.tau_mu) for k in 1:m]
+    tau_p = args.tau_p
     threads = 256
     println("time(s),iter,infeas,ot_objective,primal,dual,solver")
     linear_blocks = Int(ceil(n / threads))
@@ -185,7 +185,7 @@ function extragradient_barycenter_dual(
     Wt = [permutedims(Wₖ, (2, 1)) for Wₖ in W]
     time_start = time_ns()
     @inline function infeas(ck, μ⁺, Wₖᵀ, Wₖ, W∞, r)
-        @cuda threads = threads blocks = warp_blocks warp_logsumexp_t_fused!(sumvals, Wₖᵀ, μ⁺, ηp, st, W∞)
+        @cuda threads = threads blocks = warp_blocks warp_logsumexp_fused!(sumvals, Wₖᵀ, μ⁺, ηp, st, W∞)
         @cuda threads = threads blocks = warp_blocks residual_c!(residual_storage, r, Wₖ, μ⁺, sumvals, ηp, st, W∞)
     end
     # pr
@@ -193,22 +193,27 @@ function extragradient_barycenter_dual(
     for i in 1:args.itermax
         for k in 1:m
             infeas(c[k], ν⁺[k], Wt[k], W[k], W∞[k] * W∞_multiplier, r)
-            @cuda threads = threads blocks = linear_blocks update_μ_residual(μt⁺[k], μt⁻[k], μ⁺[k], μ⁻[k], residual_storage, c[k], eta_mu[k], args.eta_mu, args.B, false)
-            @cuda threads = threads blocks = linear_blocks update_μ(νt⁺[k], νt⁻[k], ν⁺[k], ν⁻[k], μ⁺[k], μ⁻[k], ηp)
+            @cuda threads = threads blocks = linear_blocks update_μ_residual(μt⁺[k], μt⁻[k], μ⁺[k], μ⁻[k], residual_storage, c[k], eta_mu[k], args.tau_mu * args.eta_mu, args.B, false)
+            @cuda threads = threads blocks = linear_blocks update_μ(νt⁺[k], νt⁻[k], ν⁺[k], ν⁻[k], μ⁺[k], μ⁻[k], tau_p*ηp)
 
         end
         CUDA.synchronize()
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
+            p = [r .* softmax(-(W[k] * 0.5 * st ./ W∞[k] .+ (νt⁺[k]' .- νt⁻[k]')) ./ ηp, norm_dims=2) for k in 1:m]
+            obj = dot(w, dot(p[k], W[k]) for k in 1:m)
+            feas = sum(norm(sum(p[k], dims=1)' - c[k], 1) for k in 1:m)
+            @printf "%.6e,%d,%.14e,%.14e,extragradient_barycenter_kernel\n" elapsed_time i feas obj
             break
         end
         if i % frequency == 0
-            p = [r .* softmax(-(W[k] * 0.5 * st ./ W∞[k] .+ (ν⁺[k]' .- ν⁻[k]')) ./ ηp, norm_dims=2) for k in 1:m]
+            p = [r .* softmax(-(W[k] * 0.5 * st ./ W∞[k] .+ (νt⁺[k]' .- νt⁻[k]')) ./ ηp, norm_dims=2) for k in 1:m]
             obj = dot(w, dot(p[k], W[k]) for k in 1:m)
             feas = sum(norm(sum(p[k], dims=1)' - c[k], 1) for k in 1:m)
             @printf "%.6e,%d,%.14e,%.14e,extragradient_barycenter_kernel\n" elapsed_time i feas obj
             # sleep(0.1)
             if feas < 1e-13
+                @printf "%.6e,%d,%.14e,%.14e,extragradient_barycenter_kernel\n" elapsed_time i feas obj
                 break
             end
         end
@@ -216,7 +221,7 @@ function extragradient_barycenter_dual(
         st = (1 - ηp) * st + ηp
         fill!(r̄, 0.0)
         for k in 1:m
-            @cuda threads = threads blocks = warp_blocks warp_logsumexp_t_fused!(sumvals, Wt[k], νt⁺[k], ηp, st, W∞[k])
+            @cuda threads = threads blocks = warp_blocks warp_logsumexp_fused!(sumvals, Wt[k], νt⁺[k], ηp, st, W∞[k])
             CUDA.synchronize()
             r̄ += sumvals * w[k]
         end
@@ -226,12 +231,13 @@ function extragradient_barycenter_dual(
             infeas(c[k], νt⁺[k], Wt[k], W[k], W∞[k], r̄)
             # display(residual_storage)
             # display(c[k])
-            @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺[k], μ⁻[k], μ⁺[k], μ⁻[k], residual_storage, c[k], eta_mu[k], args.eta_mu, args.B, true)
-            @cuda threads = threads blocks = linear_blocks update_μ(ν⁺[k], ν⁻[k], ν⁺[k], ν⁻[k], μt⁺[k], μt⁻[k], ηp)
+            @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺[k], μ⁻[k], μ⁺[k], μ⁻[k], residual_storage, c[k], eta_mu[k], args.tau_mu * args.eta_mu, args.B, true)
+            # @cuda threads = threads blocks = linear_blocks update_μ(ν⁺[k], ν⁻[k], ν⁺[k], ν⁻[k], μt⁺[k], μt⁻[k], ηp)
+            @cuda threads = threads blocks = linear_blocks update_μ_other(ν⁺[k], ν⁻[k], ν⁺[k], ν⁻[k], μt⁺[k], μt⁻[k], νt⁺[k], νt⁻[k], tau_p * ηp)
         end
         fill!(r̄, 0.0)
         for k in 1:m
-            @cuda threads = threads blocks = warp_blocks warp_logsumexp_t_fused!(sumvals, Wt[k], ν⁺[k], ηp, st, W∞[k])
+            @cuda threads = threads blocks = warp_blocks warp_logsumexp_fused!(sumvals, Wt[k], ν⁺[k], ηp, st, W∞[k])
             CUDA.synchronize()
             r̄ += sumvals * w[k]
         end
@@ -244,7 +250,7 @@ function extragradient_barycenter_dual(
     return p, r, μ⁺, μ⁻, st
 end
 
-function sinkhorn_barycenter_kernel(
+function ipb_kernel(
     c::AbstractArray{TA},
     loc1::TW,
     loc2::TW,
@@ -348,7 +354,7 @@ function extragradient_barycenter_kernel(
     sumvals = CUDA.zeros(R, n)
     cost_storage = CUDA.zeros(R, n)
     residual_storage = CUDA.zeros(R, n)
-    eta_mu = [1 ./ (args.C2 ./ (c[k] .+ args.C3 / n)) for k in 1:m]
+    eta_mu = [(c[k] .+ args.alpha / n)./ args.tau_mu for k in 1:m]
 
     threads = 256
     linear_blocks = Int(ceil(n / threads))
@@ -500,7 +506,7 @@ function extragradient_ot_barycenter(
     residual_storage = TA(zeros(R, n))
     maxvals = TA(zeros(R, n))
 
-    eta_mu = [args.C2 ./ ((c[k] .+ args.C3 / n)) for k in 1:m]
+    eta_mu = [(c[k] .+ args.alpha / n)./ args.tau_mu for k in 1:m]
 
     println("time(s),iter,infeas,ot_objective,primal,dual,solver")
     time_start = time_ns()

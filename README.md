@@ -58,7 +58,7 @@ optional arguments:
                         "./test.json")
   --cuda                Use CUDA
   --p P                 p for distance computation (>= 10 for infinity
-                        norm, 0 for uniform cost) (type: Int64)
+                        norm, 0 for uniform cost) (type: Float64)
   --weights WEIGHTS     Path to CSV-formatted weight matrix (default:
                         "")
   --kernel              Use kernels to compute OT matrices on the fly
@@ -101,7 +101,7 @@ optional arguments:
   --frequency FREQUENCY
                         Printing frequency (type: Int64, default: 100)
   --p P                 p for distance computation (>= 10 for infinity
-                        norm, 0 for uniform cost) (type: Int64,
+                        norm, 0 for uniform cost) (type: Float64,
                         default: 2)
   --height HEIGHT       Image height (type: Int64, default: 128)
   --width WIDTH         Image width (type: Int64, default: 128)
@@ -133,7 +133,7 @@ optional arguments:
   --frequency FREQUENCY
                         Printing frequency (type: Int64, default: 100)
   --p P                 p for distance computation (>= 10 for infinity
-                        norm, 0 for uniform cost) (type: Int64,
+                        norm, 0 for uniform cost) (type: Float64,
                         default: 2)
   --weights [WEIGHTS...]
                         Weights for Barycenter objective (default is
