@@ -23,7 +23,7 @@ optional arguments:
 ```
 Note that each command allows for user-specified parameters via a `.json` configuration file. Example configurations can be found in `./configurations`.
 - `eta_p`: Primal EOT regularization ($\eta$ used by all EOT algorithms)
-- `eta_μ`: Dual EOT regularization (used by extragradient methods)
+- `eta_mu`: Dual EOT regularization (used by extragradient methods)
 - `C1`, `C2`, `C3`: Constants used for setting parameters in extragradient methods
 - `B`: Balancing parameter used in extragradient methods
 - `itermax`: Maximum iteration count

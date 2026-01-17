@@ -9,6 +9,7 @@ solvers = Dict(
     "apdagd" => APDAGD,
     "hpd" => HPD,
     "accelerated_sinkhorn" => accelerated_sinkhorn,
+    "dual_extrapolation" => dual_extrapolation
     # "abdg" => accelerated_bregman_descent,
 )
 ctransfer_solvers = Dict(

@@ -1,5 +1,5 @@
 
-function DualExtrapolation(W::TW, r::TM, c::TM, args::EOTArgs, frequency::Int=100) where {TW<:AbstractMatrix, TM<:AbstractVector}
+function dual_extrapolation(r::TM, c::TM, W::TW, args::EOTArgs, frequency::Int=100) where {TW<:AbstractMatrix, TM<:AbstractVector}
   n = size(r, 1)
   x = TW(ones(n, n)) / n^2
   y = TM(zeros(n))
