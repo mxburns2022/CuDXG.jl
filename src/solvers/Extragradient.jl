@@ -30,12 +30,12 @@ function primalv(p::TM, W::TM, W∞::TWinf, ηp::R, r::TA, c::TA) where {TA,TM,R
 end
 function extragradient_ot(r::AbstractArray{R},
     c::AbstractArray{R},
-    W::AbstractMatrix{R},
+    W::TW,
     args::EOTArgs{R},
     frequency::Int=50;
     adjust::Bool=true,
     p0=Nothing
-) where {R}
+) where {R, TW}
     # input 
     # W∞ = maximum(W', dims=2)
     W∞ = maximum(W)
@@ -251,7 +251,7 @@ function update_θ_residual(theta::CuDeviceArray{R}, theta_0::CuDeviceArray{R}, 
         thetav = theta_0[tid]
     end
     maxval = max(difference, -difference)
-    expv = exp(difference-maxval) * ((thetav + 1) / (1-thetav))^(1 - eta_mu)
+    expv = exp(difference-maxval) * ((thetav + 1) / (1-thetav)).^(1 - eta_mu)
     theta_value_new = (expv - exp(-maxval))/ (expv + exp(-maxval))
     if adjust
         theta_value_new = clamp(theta_value_new, minv, maxv)#max(min(theta_value_new, maxv), minv)
@@ -542,22 +542,16 @@ function extragradient_ot_dual(r::CuArray{R},
         if elapsed_time > args.tmax
             break
         end
-        if args.eta_p == 0
-            ηp = 1 / (i)
-        end
-        # st = (1 - ηp^(2 / 3)) * st + ηp^(2 / 3)
-        st = (1 - ηp) * st + ηp
-        infeas(μ⁺pa, μ⁻pa, ηp)
-        @cuda threads = threads blocks = linear_blocks update_μ_residual(μ⁺, μ⁻, μ⁺, μ⁻, residual_storage, c, eta_mu, args.eta_mu, args.B, true)
-        @cuda threads = threads blocks = linear_blocks update_μ(μ⁺p, μ⁻p, μ⁺p, μ⁻p, μ⁺t, μ⁻t, ηp)
-        # ηp *= 0.99
+        # if args.eta_p == 0
+        #     ηp = 1 / (i)
+        # end
 
         if (i - 1) % frequency == 0
             p = softmax(-(W * 0.5 * st / W∞ .+ ν') ./ ηt, norm_dims=2)
             obj = dot(W, round(r .* p, r, c))
             # pr = r .* p
             primal_value = primalv((1 .+ ν)./2, (1 .- ν)./2, st, W, W∞, ηt, ηp, r, c) + 2ηp * hr
-            dual_value = dualv(θ, 1.0, W, W∞, ηp, r, c)
+            dual_value = dualv(θ, 1.0, W, W∞, ηp, r, c) + 2ηp * hr
             # feas = norm(sum(pr, dims=1)' - c, 1)
             feas = norm(c - sum((r.*p)', dims=2) , 1)
 

@@ -15,7 +15,7 @@ function residual_spp_c!(output::CuDeviceVector{T}, cost_output::CuDeviceVector{
     N_outer = Int(ceil(M / nwarps))
     local_id = (threadIdx().x - 1) % step
     c1 = st / 2W∞
-    invreg = one(T) / (reg / 2W∞)
+    invreg = one(T) / (reg)
     Ntiles = (N) ÷ step
     for _ in 1:N_outer
         local_acc = 0.0
@@ -753,15 +753,17 @@ function warp_logsumexp_spp_ct_opt!(output::CuDeviceVector{T}, img1::CuDeviceMat
     N_outer = Int(ceil(N / nwarps))
     local_id = (threadIdx().x - 1) % step
     c1 = st / 2W∞
-    invreg = one(T) / (reg / 2W∞)
+    invreg = one(T) / (reg)
     Ntiles = (N) ÷ step
     for _ in 1:N_outer
         if tid_x > N
             return
         end
-        pix1r = img1[1, tid_x]
-        pix1g = img1[2, tid_x]
-        pix1b = img1[3, tid_x]
+        @inbounds begin
+            pix1r = img1[1, tid_x]
+            pix1g = img1[2, tid_x]
+            pix1b = img1[3, tid_x]
+        end
         maxval = -Inf
 
         for tile in 0:Ntiles-1
@@ -831,7 +833,7 @@ function warp_logsumexp_spp_ct_opt!(output::CuDeviceVector{T}, img1::CuDeviceMat
                 elseif p == Inf
                     l2dist = max(abs(dr), max(abs(dg), abs(db)))
                 else
-                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                    l2dist = abs(dr)^p + abs(dg)^p + abs(db)^p
                 end
                 value = -(muladd(l2dist, c1, muval)) * invreg
             end
@@ -880,22 +882,25 @@ function warp_logsumexp_spp_ct_fused!(output::CuDeviceVector{T}, img1::CuDeviceM
     tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
     N = size(img1, 2)
     M = size(img2, 2)
-    N_outer = Int(ceil(N / nwarps))
+    N_outer = Int(ceil(M / nwarps))
     local_id = (threadIdx().x - 1) % step
     c1 =  st / 2W∞
-    invreg = one(T) / (reg / 2W∞)
+    invreg = one(T) / (reg)
     Ntiles = (M) ÷ step
 
     for _ in 1:N_outer
         if tid_x > N
             return
         end
-        pix1r = img1[1, tid_x]
-        pix1g = img1[2, tid_x]
-        pix1b = img1[3, tid_x]
+        @inbounds begin
+            pix1r = img1[1, tid_x]
+            pix1g = img1[2, tid_x]
+            pix1b = img1[3, tid_x]
+        end
+        
         m_local = T(-Inf)
         s_local = T(0)
-        
+
         for tile in 0:Ntiles-1
             j = tile * warpsize() + 1
             @inbounds begin
@@ -914,7 +919,6 @@ function warp_logsumexp_spp_ct_fused!(output::CuDeviceVector{T}, img1::CuDeviceM
                     l2dist = max(abs(dr), max(abs(dg), abs(db)))
                 else
                     l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
-                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
                 end
             end
             v = -(muladd(l2dist, c1, muval)) * invreg
@@ -925,7 +929,7 @@ function warp_logsumexp_spp_ct_fused!(output::CuDeviceVector{T}, img1::CuDeviceM
                 m_local = v
             end
         end
-        if (Ntiles) * warpsize() + local_id <= M
+        if (Ntiles) * warpsize() + local_id + 1 <= M
             j = (Ntiles) * warpsize() + 1
             @inbounds begin
                 pix2r = img2[1, j+local_id]
@@ -972,6 +976,7 @@ function warp_logsumexp_spp_ct_fused!(output::CuDeviceVector{T}, img1::CuDeviceM
         if local_id == 0
             output[tid_x] = log(s) + m
         end
+
         tid_x += nwarps
     end
     return
@@ -1056,7 +1061,7 @@ function warp_min_reduce!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
 end
 
 
-function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::CuArray{T}, marginal2::CuArray{T}, args::EOTArgs, frequency::Int=100, normalize_cost::Bool=false, p::Float64=2.0) where T<:Real
+function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::CuArray{T}, marginal2::CuArray{T}, args::EOTArgs, frequency::Int=100,  p::Float64=2.0) where T<:Real
     N = size(img1, 2)
     M = size(img2, 2)
     θ = CUDA.zeros(T, M)
@@ -1071,7 +1076,7 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
     @cuda threads = threads blocks = warp_blocks max_logsumexp_spp_ct!(sumvals, img1, img2, p)
     CUDA.synchronize()
     W∞ = maximum(sumvals)
-    η = T(args.eta_p / 2)
+    η = T(args.eta_p) / 2W∞
 
     eta_mu = (marginal2 .+ T(args.alpha) / N) / args.tau_mu
     time_start = time_ns()
@@ -1110,15 +1115,14 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
         η
     end
     if p != Inf
-        W∞_scaling = (W∞)^p
+        W∞_scaling = W∞
         img1 ./= (W∞_scaling)^(1/p)
-        img2 ./= (W∞_scaling)^(1/p)
+        if !(img1 === img2)
+            img2 ./= (W∞_scaling)^(1/p)
+        end
         W∞ = W∞/W∞_scaling#1.0
     else
         W∞_scaling = 1.0
-        # img1 ./= (W∞_scaling)^(1/p)
-        # img2 ./= (W∞_scaling)^(1/p)
-        # W∞ = W∞/W∞_scaling#1.0
     end
     
     st = if args.eta_p == 0
@@ -1161,7 +1165,7 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
         end
         # perform the extragradient step
         infeas(ν, ηt, st)
-        @cuda threads = threads blocks = linear_blocks update_θ_residual(θ̄, θ, residual_cache, marginal2, eta_mu, T(args.eta_mu), false, minv, maxv, 1/2W∞)
+        @cuda threads = threads blocks = linear_blocks update_θ_residual(θ̄, θ, residual_cache, marginal2, eta_mu, T(args.eta_mu), false, minv, maxv, 1.0)
         # println(θ̄)
         # println(residual_cache-marginal2)
         # sleep(1)
@@ -1171,7 +1175,7 @@ function extragradient_color_transfer(img1::CuArray{T}, img2::CuArray{T}, margin
         CUDA.synchronize()
         st = (1 - ηt) * st + ηt
         infeas(ν̄, ηt, st)
-        @cuda threads = threads blocks = linear_blocks update_θ_residual(θ, θ, residual_cache, marginal2, eta_mu, T(args.eta_mu), true, minv, maxv, 1/2W∞)
+        @cuda threads = threads blocks = linear_blocks update_θ_residual(θ, θ, residual_cache, marginal2, eta_mu, T(args.eta_mu), true, minv, maxv, 1.0)
         ν .= (1-ηt) * ν + ηt * θ̄
 
         CUDA.synchronize()
@@ -1194,7 +1198,7 @@ end
 function extragradient_color_transfer(f1::String, f2::String, out_f1::String, out_f2::String, resolution::Tuple{Int,Int}, args::EOTArgs, frequency::Int, p::Float64)
     img1, dims1, marginal1 = load_rgb(f1; cuda=true, resolution=resolution)
     img2, dims2, marginal2 = load_rgb(f2; cuda=true, resolution=resolution)
-    mu1, phi, psi, img1_new, img2_new = extragradient_color_transfer(img1, img2, marginal1, marginal2, args, frequency, false, p)
+    mu1, phi, psi, img1_new, img2_new = extragradient_color_transfer(img1, img2, marginal1, marginal2, args, frequency, p)
     save_image(out_f1, img1_new, dims1)
     save_image(out_f2, img2_new, dims2)
 end

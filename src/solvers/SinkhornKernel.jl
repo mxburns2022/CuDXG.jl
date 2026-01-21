@@ -46,7 +46,7 @@ function residual_opt!(output::CuDeviceVector{T}, cost_output::CuDeviceVector{T}
             local_acc += exp(value)
             cost_acc += exp(value) * l2dist
         end
-        if (Ntiles) * warpsize() + local_id < N
+        if (Ntiles) * warpsize() + local_id  < N
             j = (Ntiles) * warpsize() + 1
             @inbounds begin
                 pix2r = img2[1, j+local_id]
@@ -337,6 +337,113 @@ function warp_logsumexp_ct_opt!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{
     return
 end
 
+
+function warp_logsumexp_ct_fused!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
+    img2::CuDeviceMatrix{T}, marginal::CuDeviceVector{T}, θ::CuDeviceVector{T}, reg::T, W∞::T, p::Float64) where T
+    step = warpsize()
+    nwarps = (gridDim().x * blockDim().x) ÷ step
+    tid_x = (threadIdx().x + (blockIdx().x - 1) * blockDim().x - 1) ÷ step + 1
+    N = size(img1, 2)
+    M = size(img2, 2)
+    N_outer = Int(ceil(N / nwarps))
+    local_id = (threadIdx().x - 1) % step
+    invreg = -one(T) / (reg * W∞)
+    Ntiles = (M) ÷ step
+
+    for _ in 1:N_outer
+        if tid_x > N
+            return
+        end
+        @inbounds begin
+            pix1r = img1[1, tid_x]
+            pix1g = img1[2, tid_x]
+            pix1b = img1[3, tid_x]
+        end
+        m_local = T(-Inf)
+        s_local = T(0)
+        
+        for tile in 0:Ntiles-1
+            j = tile * warpsize() + 1
+            @inbounds begin
+                pix2r = img2[1, j+local_id]
+                pix2g = img2[2, j+local_id]
+                pix2b = img2[3, j+local_id]
+                muval = θ[j+local_id]
+                dr = (pix1r - pix2r)
+                dg = (pix1g - pix2g)
+                db = (pix1b - pix2b)
+                if p == 1
+                    l2dist = abs(dr) + abs(dg) + abs(db)
+                elseif p == 2
+                    l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                end
+            end
+            v = muladd(l2dist, invreg, muval)
+            if v <= m_local
+                s_local += exp(v - m_local)
+            else
+                s_local = s_local * exp(m_local - v) + one(T)
+                m_local = v
+            end
+        end
+        if (Ntiles) * warpsize() + local_id + 1 <= M
+            j = (Ntiles) * warpsize() + 1
+            @inbounds begin
+                pix2r = img2[1, j+local_id]
+                pix2g = img2[2, j+local_id]
+                pix2b = img2[3, j+local_id]
+                muval = θ[j+local_id]
+                dr = (pix1r - pix2r)
+                dg = (pix1g - pix2g)
+                db = (pix1b - pix2b)
+                if p == 1
+                    l2dist = abs(dr) + abs(dg) + abs(db)
+                elseif p == 2
+                    l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
+                elseif p == Inf
+                    l2dist = max(abs(dr), max(abs(dg), abs(db)))
+                else
+                    l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
+                end
+            end
+            v = muladd(l2dist, invreg, muval)
+            if v <= m_local
+                s_local += exp(v - m_local)
+            else
+                s_local = s_local * exp(m_local - v) + one(T)
+                m_local = v
+            end
+        end
+        # Warp-level reduction of (m,s)
+        m = shfl_down_sync(0xffffffff, m_local, 16)
+        s = shfl_down_sync(0xffffffff, s_local, 16)
+        m_local, s_local = _lse_pair_combine((m_local, s_local), (m, s))
+        m = shfl_down_sync(0xffffffff, m_local, 8)
+        s = shfl_down_sync(0xffffffff, s_local, 8)
+        m_local, s_local = _lse_pair_combine((m_local, s_local), (m, s))
+        m = shfl_down_sync(0xffffffff, m_local, 4)
+        s = shfl_down_sync(0xffffffff, s_local, 4)
+        m_local, s_local = _lse_pair_combine((m_local, s_local), (m, s))
+        m = shfl_down_sync(0xffffffff, m_local, 2)
+        s = shfl_down_sync(0xffffffff, s_local, 2)
+        m_local, s_local = _lse_pair_combine((m_local, s_local), (m, s))
+        m = shfl_down_sync(0xffffffff, m_local, 1)
+        s = shfl_down_sync(0xffffffff, s_local, 1)
+        m, s = _lse_pair_combine((m_local, s_local), (m, s))
+        if local_id == 0
+
+            output[tid_x] = log(marginal[tid_x]) - (log(s) + m)
+        end
+        tid_x += nwarps
+    end
+    return
+end
+
 @inline function reduce_block(op, val::T, neutral, shared) where T
     threads = blockDim().x
     thread = threadIdx().x
@@ -493,7 +600,6 @@ function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::
     time_start = time_ns()
     η = args.eta_p
     @cuda threads = threads blocks = blocks max_logsumexp_spp_ct!(residual_cache, img1, img2, p)
-    CUDA.synchronize()
     W∞ = maximum(residual_cache)
     println("time(s),iter,infeas,ot_objective,dual")
     for i in 1:args.itermax
@@ -501,8 +607,8 @@ function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::
         if elapsed_time > args.tmax
             break
         end
-        @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(φ, img1, img2, marginal1, ψ, η, W∞, p)
-        @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(ψ, img2, img1, marginal2, φ, η, W∞, p)
+        @cuda threads = threads blocks = blocks warp_logsumexp_ct_fused!(φ, img1, img2, marginal1, ψ, η, W∞, p)
+        @cuda threads = threads blocks = blocks warp_logsumexp_ct_fused!(ψ, img2, img1, marginal2, φ, η, W∞, p)
         CUDA.synchronize()
         if args.verbose && (i - 1) % frequency == 0
             @cuda threads = threads blocks = blocks residual_opt!(residual_cache, cost_cache, img1, img2, marginal1, φ, ψ, η, W∞, p)

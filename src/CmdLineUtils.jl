@@ -186,6 +186,7 @@ function run_dot(parsed_args)
             locations[2, i] = (i - 1) % w
         end
         locations = CuArray(locations)
+        # locations2 = CuArray(locations)
         if parsed_args["algorithm"] == "sinkhorn"
             sinkhorn_euclidean(r, c, locations, locations, parsed_args["output1"], parsed_args["output2"], parsed_args["potential-out"], args, parsed_args["frequency"], parsed_args["p"])
         elseif parsed_args["algorithm"] == "dual_extragradient"
