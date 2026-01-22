@@ -4,17 +4,17 @@ using LinearAlgebra
 using Random
 using Test
 
-function dualv(theta, st, W, W∞, ηt, r, c)
-    if ηt == 0
-        return sum(-dot(c, W∞ .* 2(theta))) + sum(r'*minimum((W .+ 2W∞ .*theta'), dims=2))
+function dualv(theta, st, W, W∞, ηp, r, c)
+    if ηp == 0
+        return sum(-dot(c, W∞ .* (theta))) + sum(r'*minimum((0.5*W .+ W∞ .*theta'), dims=2))
     end
-    lse = logsumexp(-(W * st .+ (2W∞ .* theta)') ./ ηt, 2)
-    return (-2W∞ * sum(c' * theta) - ηt * sum(r' *lse))
+    lse = logsumexp(-(0.5*W * st .+ (W∞ .* theta)') ./ ηp, 2)
+    return (-W∞ * sum(c' * theta) - ηp * sum(r' *lse))
 end
 function primalv(μ⁺p::TA, μ⁻p::TA, st::R, W::TM, W∞::TWinf, ηt::R, ηp::R, r::TA, c::TA) where {TA,TM,R,TWinf}
     pμ = softmax(-(0.5W * st .+ (W∞ .* (μ⁺p .- μ⁻p))') ./ ηt, norm_dims=2)
-    return (dot(W, r .* pμ)
-            + 2 .* sum(W∞ .* abs.(sum(r .* pμ, dims=1)' - c))
+    return (0.5*dot(W, r .* pμ)
+            + sum(W∞ .* abs.(sum(r .* pμ, dims=1)' - c))
             + 2ηp * dot(r, neg_entropy(pμ, dims=2)))
 end
 
@@ -532,7 +532,7 @@ function extragradient_ot_dual(r::CuArray{R},
     for i in 1:args.itermax
         ηt_next = ηt  / (1 + τp*(ηt - ηp))
         infeas(ν, ηt, st)
-        d1 = dualv(ν, st, W, W∞, ηt, r, c)
+        d1 = dualv(ν, st, W, W∞, ηp, r, c)
         grad = 2W∞ .* (residual_storage - c)
         @cuda threads = threads blocks = linear_blocks update_θ_residual(θ̄, θ, residual_storage, c, eta_mu, args.tau_mu*args.eta_mu, false, minv, maxv, 1.0)
 
@@ -555,7 +555,7 @@ function extragradient_ot_dual(r::CuArray{R},
             # feas = norm(sum(pr, dims=1)' - c, 1)
             feas = norm(c - sum((r.*p)', dims=2) , 1)
 
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,extragrad_dual_cuda\n" elapsed_time i feas obj primal_value dual_value
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,%.14e,extragrad_dual_cuda\n" elapsed_time i feas obj primal_value dual_value primal_value-dual_value
             if feas < args.epsilon / 2 && primal_value - dual_value < args.epsilon / 2
                 break
             end
