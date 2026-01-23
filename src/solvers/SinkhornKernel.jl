@@ -391,7 +391,7 @@ function warp_logsumexp_ct_fused!(output::CuDeviceVector{T}, img1::CuDeviceMatri
                 m_local = v
             end
         end
-        if (Ntiles) * warpsize() + local_id + 1 <= M
+        if (Ntiles) * warpsize() + local_id < M
             j = (Ntiles) * warpsize() + 1
             @inbounds begin
                 pix2r = img2[1, j+local_id]
@@ -436,7 +436,6 @@ function warp_logsumexp_ct_fused!(output::CuDeviceVector{T}, img1::CuDeviceMatri
         s = shfl_down_sync(0xffffffff, s_local, 1)
         m, s = _lse_pair_combine((m_local, s_local), (m, s))
         if local_id == 0
-
             output[tid_x] = log(marginal[tid_x]) - (log(s) + m)
         end
         tid_x += nwarps
@@ -473,63 +472,6 @@ end
     end
 
     return val
-end
-function block_logsumexp_ct!(output::CuDeviceVector{T}, img1::CuDeviceMatrix{T},
-    img2::CuDeviceMatrix{T}, ψ::CuDeviceVector{T}, reg::T) where T
-    step = blockDim().x
-    # nwarps = (gridDim().x * blockDim().x) ÷ step
-    tid_x = blockIdx().x
-    N = size(img1, 2)
-    local_id = threadIdx().x - 1
-    shared = CuStaticSharedArray(T, (1024,))
-
-    if tid_x > N
-        return
-    end
-    pix1r = img1[1, tid_x]
-    pix1g = img1[2, tid_x]
-    pix1b = img1[3, tid_x]
-    maxval = -Inf
-    for i in 1:step:N
-        # if tid_x == 1 && local_id == 0
-        #     @cuprintln("$(step)")
-        # end
-        if i + local_id > N
-            break
-        end
-        pix2r = img2[1, i+local_id]
-        pix2g = img2[2, i+local_id]
-        pix2b = img2[3, i+local_id]
-        l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-        value = -(l2dist) / reg + ψ[i+local_id]
-        maxval = max(value, maxval)
-    end
-    maxval = reduce_block(max, maxval, -Inf, shared)
-    if local_id == 0
-        output[tid_x] = maxval
-    end
-    sync_threads()
-    maxval = output[tid_x]
-
-    local_acc = 0.0
-    for i in 1:step:N
-        if i + local_id > N
-            break
-        end
-        pix2r = img2[1, i+local_id]
-        pix2g = img2[2, i+local_id]
-        pix2b = img2[3, i+local_id]
-        l2dist = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-        value = -(l2dist) / reg + ψ[i+local_id]
-        local_acc += exp(value - maxval)
-    end
-    local_acc2 = reduce_block(+, local_acc, 0.0, shared)#CUDA.reduce_warp(+, local_acc)
-    sync_threads()
-    if local_id == 0
-        output[tid_x] = -log(N) - (log(local_acc2) + maxval)
-    end
-    # tid_x += nwarps
-    return
 end
 
 function test_logsumexp_kernel()
@@ -601,21 +543,32 @@ function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::
     η = args.eta_p
     @cuda threads = threads blocks = blocks max_logsumexp_spp_ct!(residual_cache, img1, img2, p)
     W∞ = maximum(residual_cache)
+    # if p == Inf
+    #     img1 ./= W∞
+    #     img2 ./= W∞
+    # else
+    #     W∞ = 1.0
+    # end
     println("time(s),iter,infeas,ot_objective,dual")
     for i in 1:args.itermax
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
             break
         end
-        @cuda threads = threads blocks = blocks warp_logsumexp_ct_fused!(φ, img1, img2, marginal1, ψ, η, W∞, p)
-        @cuda threads = threads blocks = blocks warp_logsumexp_ct_fused!(ψ, img2, img1, marginal2, φ, η, W∞, p)
+        if p == Inf
+            @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(φ, img1, img2, marginal1, ψ, η, W∞, p)
+            @cuda threads = threads blocks = blocks warp_logsumexp_ct_opt!(ψ, img2, img1, marginal2, φ, η, W∞, p)
+        else
+            @cuda threads = threads blocks = blocks warp_logsumexp_ct_fused!(φ, img1, img2, marginal1, ψ, η, W∞, p)
+            @cuda threads = threads blocks = blocks warp_logsumexp_ct_fused!(ψ, img2, img1, marginal2, φ, η, W∞, p)
+        end
         CUDA.synchronize()
         if args.verbose && (i - 1) % frequency == 0
             @cuda threads = threads blocks = blocks residual_opt!(residual_cache, cost_cache, img1, img2, marginal1, φ, ψ, η, W∞, p)
             CUDA.synchronize()
             residual_r = norm(residual_cache, 1)
-            ot_objective = sum(cost_cache)
-            objective = dot(ψ, marginal2) + dot(φ, marginal1)
+            ot_objective = W∞*sum(cost_cache)
+            objective =W∞* (dot(ψ, marginal2) + dot(φ, marginal1))
             @printf "%.6e,%d,%.14e,%.14e,%.14e,sinkhorn_kernel\n" elapsed_time i residual_r ot_objective objective
             if residual_r <= args.epsilon / 2
                 break
