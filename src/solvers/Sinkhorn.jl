@@ -53,10 +53,10 @@ function sinkhorn_log(r::AbstractArray{R},
             obj = dot(p, W)
             pobj = obj + args.eta_p * sum(neg_entropy(p))
             # println()
-            dobj = args.eta_p * (sum(-logsumexp(K .+ φ .+ ψ')) - c'ψ - sum(r'φ))
+            dobj = -args.eta_p * (sum(-logsumexp(K .+ φ .+ ψ')) - c'ψ - sum(r'φ))
             # pdgap = -pobj + dobj
             @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,sinkhorn\n" elapsed_time i feas obj pobj dobj
-            if pobj + dobj < args.epsilon / 6 && feas < args.epsilon / 6
+            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
         end

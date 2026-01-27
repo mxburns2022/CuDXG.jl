@@ -48,9 +48,9 @@ function greenkhorn_log(r::TA,
             feas = norm(sum(p, dims=1)' .- c, 1) + norm(sum(p, dims=2) .- r, 1)
             obj = dot(p, W)
             pobj = obj + args.eta_p * sum(neg_entropy(p, dims=[1, 2]))
-            dobj = args.eta_p * (-sum(log.(sum(p))) - sum(c'log.(ψ)) - sum(r'log.(φ)))
+            dobj = -(args.eta_p * (-sum(log.(sum(p))) - sum(c'log.(ψ)) - sum(r'log.(φ))))
             @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,greenkhorn\n" elapsed_time k feas obj pobj dobj
-            if pobj + dobj < args.epsilon / 6 && feas < args.epsilon / 6
+            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
         end

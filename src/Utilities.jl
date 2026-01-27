@@ -17,12 +17,13 @@ end
 @kwdef mutable struct EOTArgs{R}
     eta_p::R = 0.0
     eta_mu::R = 0.0
-    C1::R = 1.0
-    C2::R = 1.0
-    C3::R = 1e-2
+    tau_p::R = 1.0
+    tau_mu::R = 1.0
+    alpha::R = 0.01
     B::R = 1.0
     epsilon::R = 1e-4
     itermax::Int = 10_000
+    inner_iter::Int = 10
     tmax::Float64 = Inf
     verbose::Bool = true
 end
@@ -108,10 +109,10 @@ function polyroot(a, b, c, γ)
     end
     return x
 end
-function generate_random_ot(N, rng)
-    r = normalize(rand(rng, N), 1)
+function generate_random_ot(N, M, rng)
+    r = normalize(rand(rng, M), 1)
     c = normalize(rand(rng, N), 1)
-    W = abs.(randn(rng, N, N))
+    W = abs.(randn(rng, M, N))
     optimum = emd2(r, c, W)
     return r, c, W, optimum
 end
@@ -123,7 +124,7 @@ function neg_entropy(x::TA; dims=[]) where TA
             end, x), dims=dims)
 end
 
-function get_euclidean_distance(height::Int, width::Int; p::Int=2)
+function get_euclidean_distance(height::Int, width::Int; p::Float64=2.0)
     N = height * width
     W = zeros(N, N)
     for (i, j) in product(0:(N-1), 0:(N-1))
