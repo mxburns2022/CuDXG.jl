@@ -56,10 +56,10 @@ function accelerated_sinkhorn(r::AbstractArray{R},
             # println(ψ'c, " ", φ'r)
             obj = dot(pr, W)
             pobj = obj + args.eta_p * sum(neg_entropy(pr))
-            dobj = -sum(logsumexp(K .+ ǔ .+ v̌')) - args.eta_p * sum(r'ǔ + c'v̌)
+            dobj = -(-sum(logsumexp(K .+ ǔ .+ v̌')) - args.eta_p * sum(r'ǔ + c'v̌))
             # pdgap = -pobj + dobj
             @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,accelerated_sinkhorn\n" elapsed_time i feas obj pobj dobj
-            if pobj + dobj < args.epsilon / 6 && feas < args.epsilon / 6
+            if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
         end

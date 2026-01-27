@@ -1,12 +1,12 @@
 {
-    "eta_p": 0,
+    "eta_p": 1e-3,
     "eta_mu": 0.0,
-    "tau_p": 0.4,
-    "tau_mu": 0.4,
+    "tau_p": 1.0,
+    "tau_mu": 1.0,
     "alpha": 0.01,
     "B": 1.1,
-    "epsilon": 1e-6,
-    "itermax": 10000,
+    "epsilon": 1e-11,
+    "itermax": 1000000,
     "verbose": true,
     "tmax": 14400,
     "inner_iter": 5

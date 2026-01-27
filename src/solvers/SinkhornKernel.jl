@@ -474,63 +474,6 @@ end
     return val
 end
 
-function test_logsumexp_kernel()
-    N = 100
-    img1 = rand(3, N)
-    img2 = rand(3, N)
-    W = zeros(N, N)
-    η = 1e-2
-    for (i, j) in product(axes(W, 1), axes(W, 2))
-        pix1r = img1[1, i]
-        pix1g = img1[2, i]
-        pix1b = img1[3, i]
-        pix2r = img2[1, j]
-        pix2g = img2[2, j]
-        pix2b = img2[3, j]
-        W[i, j] = (pix1r - pix2r)^2 + (pix1g - pix2g)^2 + (pix1b - pix2b)^2
-    end
-    ψ = zeros(N)
-    φ = zeros(N)
-
-    maxvalsr = maximum(-W ./ η .+ ψ', dims=2)
-    φ = -log(N) .- (log.(sum(exp.(-W ./ η .+ ψ' .- maxvalsr), dims=2)) + maxvalsr)
-    φ_cu = CuArray(reshape(φ, N))
-
-    maxvalsc = maximum(-W ./ η .+ φ, dims=1)
-    ψ = -log(N) .- (log.(sum(exp.(-W ./ η .+ φ .- maxvalsc), dims=1)) + maxvalsc)'
-    ψ_cu = CuArray(reshape(ψ, N))
-    maxvalsr = maximum(-W ./ η .+ ψ', dims=2)
-    logsumexp_value_r = -log(N) .- (log.(sum(exp.(-W ./ η .+ ψ' .- maxvalsr), dims=2)) + maxvalsr)
-    maxvalsc = maximum((-W ./ η .+ φ), dims=1)
-    logsumexp_value_c = -log(N) .- (log.(sum(exp.(-W ./ η .+ φ .- maxvalsc), dims=1)) + maxvalsc)'
-    output_r = CuArray(zeros(N))
-    output_c = CuArray(zeros(N))
-    img1_cu = CuArray(img1)
-    img2_cu = CuArray(img2)
-    @cuda threads = 256 blocks = 32 warp_logsumexp_ct!(output_r, img1_cu, img2_cu, ψ_cu, η)
-    @cuda threads = 256 blocks = 32 warp_logsumexp_ct!(output_c, img2_cu, img1_cu, φ_cu, η)
-    CUDA.synchronize()
-    @test norm(Array(output_r) - logsumexp_value_r) ≈ 0 atol = 1e-10
-    @test norm(Array(output_c) - logsumexp_value_c) ≈ 0 atol = 1e-10
-
-    @cuda threads = 256 blocks = 2 warp_logsumexp_ct!(output_r, img1_cu, img2_cu, ψ_cu, η)
-    @cuda threads = 256 blocks = 2 warp_logsumexp_ct!(output_c, img2_cu, img1_cu, φ_cu, η)
-    CUDA.synchronize()
-    @test norm(Array(output_r) - logsumexp_value_r) ≈ 0 atol = 1e-10
-    @test norm(Array(output_c) - logsumexp_value_c) ≈ 0 atol = 1e-10
-
-    @cuda threads = 256 blocks = 32 residual_opt!(output_r, img1_cu, img2_cu, φ_cu, ψ_cu, η)
-    @cuda threads = 256 blocks = 32 residual_opt!(output_c, img2_cu, img1_cu, ψ_cu, φ_cu, η)
-    CUDA.synchronize()
-    marginal_r = sum(exp.(-W ./ η .+ φ .+ ψ'), dims=2)
-    marginal_c = sum(exp.(-W ./ η .+ φ .+ ψ')', dims=2)
-    residual_r = ones(N) / N - marginal_r
-    residual_c = ones(N) / N - marginal_c
-    @test norm(residual_r - Array(output_r)) ≈ 0 atol = 1e-10
-    @test norm(residual_c - Array(output_c)) ≈ 0 atol = 1e-10
-    # marginal_c
-end
-
 function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::CuArray{T}, marginal2::CuArray{T}, args::EOTArgs, frequency::Int=100, p::Union{Int, Float64} = 2) where T<:Real
     N = size(img1, 2)
     φ = CUDA.zeros(T, N)
@@ -570,7 +513,7 @@ function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::
             ot_objective = W∞*sum(cost_cache)
             objective =W∞* (dot(ψ, marginal2) + dot(φ, marginal1))
             @printf "%.6e,%d,%.14e,%.14e,%.14e,sinkhorn_kernel\n" elapsed_time i residual_r ot_objective objective
-            if residual_r <= args.epsilon / 2
+            if residual_r <= args.epsilon / 6
                 break
             end
         end

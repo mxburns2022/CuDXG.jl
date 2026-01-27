@@ -2,7 +2,7 @@
 
 julia_version = "1.12.3"
 manifest_format = "2.0"
-project_hash = "353a47782b1dc61083594959aba106404b408674"
+project_hash = "6b07238b8bb64ad876df9497e3be8602dbfd46d9"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -1198,6 +1198,11 @@ version = "2.41.2+0"
 deps = ["Libdl", "OpenBLAS_jll", "libblastrampoline_jll"]
 uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 version = "1.12.0"
+
+[[deps.LinkCutTrees]]
+git-tree-sha1 = "e7f793aed9b96d7dcafc8f6f42219a9d558e6c8c"
+uuid = "9b2c3604-c02d-4033-9e75-a81d4d4fb586"
+version = "0.2.1"
 
 [[deps.LittleCMS_jll]]
 deps = ["Artifacts", "JLLWrappers", "JpegTurbo_jll", "Libdl", "Libtiff_jll"]

@@ -73,9 +73,9 @@ function APDAMD(r::TA,
         if args.verbose && (i - 1) % frequency == 0
             obj = dot(round(state.p, r, c), W)
             pobj = obj + prob.η * sum(neg_entropy(p))
-            dobj = prob.η * state.dobj
+            dobj = -prob.η * state.dobj
             @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,APDAMD\n" elapsed_time i state.infeas obj pobj dobj
-            if pobj + state.dobj < args.epsilon / 6 && state.infeas < args.epsilon / 6
+            if pobj - state.dobj < args.epsilon / 6 && state.infeas < args.epsilon / 6
                 break
             end
         end
