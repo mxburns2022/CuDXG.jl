@@ -98,3 +98,9 @@ optional arguments:
   --output2 OUTPUT2     Output path for color mapped image 2
   -h, --help            show this help message and exit
 ```
+
+
+## Experiments and Data
+The data used for plotting each figure in the main paper is provided in `data_archive`. Experiment code can be found in `experiments`, and the code to plot all figures can be found in `experiments/make_figures.ipynb`.
+
+The `experiments` folder assumes an environment variable `BENCH` exists which points to the parent of the DOTmark directory, e.g., `$BENCH/DOTmark_v1.0` exists. 
