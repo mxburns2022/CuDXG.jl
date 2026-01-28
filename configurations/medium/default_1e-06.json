@@ -1,0 +1,13 @@
+{
+    "eta_p": 1e-6,
+    "eta_mu": 0.0,
+    "tau_p": 1.0,
+    "tau_mu": 1.0,
+    "alpha": 0.01,
+    "B": 1.1,
+    "epsilon": 1e-10,
+    "itermax": 1000000,
+    "verbose": true,
+    "tmax": 3600,
+    "inner_iter": 10
+}
