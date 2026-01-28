@@ -1,4 +1,4 @@
-# CuDXG.jl
+# CuLAMP.jl
 
 Implementation of the Log-Averaged Mirror Prox (LAMP) algorithm for discrete (Entropic) Optimal Transport. The algorithm is a dual-only, linear-space implementation of the Primal-Dual Mirror Prox (PDMP) method originally proposed by [1].
 
