@@ -1,0 +1,3 @@
+[submodule "OT-scOmics"]
+	path = OT-scOmics
+	url = https://github.com/cantinilab/OT-scOmics.git

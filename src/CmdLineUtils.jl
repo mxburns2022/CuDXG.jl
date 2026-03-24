@@ -15,6 +15,10 @@ ctransfer_solvers = Dict(
     "lamp" => LAMP,
     "sinkhorn" => sinkhorn_log
 )
+cellsim_solvers = Dict(
+    "lamp" => extragradient_cell_distance,
+    "sinkhorn" => sinkhorn_cell_distance,
+)
 settings = ArgParseSettings(prog="culamp")
 @add_arg_table! settings begin
     "run"
@@ -23,6 +27,10 @@ settings = ArgParseSettings(prog="culamp")
 
     "ctransfer"
     help = "Perform color transfer using a metric kernel. CUDA is used by default."
+    action = :command
+
+    "cellsim"
+    help = "Compute a streaming C-index over OT-scOmics cells using an on-the-fly feature cost kernel."
     action = :command
 
 end
@@ -105,6 +113,33 @@ end
     help = "Output path for color mapped image 2"
     required = true
 end
+@add_arg_table! settings["cellsim"] begin
+    "--algorithm", "-a"
+    help = "Algorithm to solve the cell OT problem. Options are: $(join(keys(cellsim_solvers), ", "))"
+    range_tester = x -> x in keys(cellsim_solvers)
+    default = "lamp"
+    "--settings"
+    help = "Solver configuration settings"
+    default = "./test.json"
+    "--frequency"
+    help = "Progress printing frequency in number of cell pairs"
+    default = 100
+    arg_type = Int
+    "--cost"
+    help = "Ground cost metric over features. Options are: $(join(CELL_COST_METRICS, ", "))"
+    range_tester = x -> lowercase(x) in CELL_COST_METRICS
+    default = "correlation"
+    "--normalize-features"
+    help = "L1-normalize each feature across cells before kernel distances are evaluated"
+    default = true
+    arg_type = Bool
+    "--output"
+    help = "Optional output path for a one-line summary"
+    default = ""
+    "file"
+    help = "Path to an OT-scOmics preprocessed CSV or CSV.GZ file"
+    required = true
+end
 function run_dot(parsed_args)
     args = read_args_json(parsed_args["settings"])
     marginal1, h, w, N = read_dotmark_data(parsed_args["file1"])
@@ -157,6 +192,28 @@ function run_ctransfer(parsed_args)
     end
 end
 
+function run_cellsim(parsed_args)
+    args = read_args_json(parsed_args["settings"])
+    metric = normalize_cell_cost_metric(parsed_args["cost"])
+    solver = cellsim_solvers[parsed_args["algorithm"]]
+    result = compute_otscomics_c_index(
+        parsed_args["file"],
+        args;
+        metric=metric,
+        normalize_features=parsed_args["normalize-features"],
+        frequency=parsed_args["frequency"],
+        solver=solver,
+    )
+    summary = "c_index=$(result.c_index),Sw=$(result.Sw),Smin=$(result.Smin),Smax=$(result.Smax),Nw=$(result.Nw),pairs=$(result.pairs)"
+    println(summary)
+    if parsed_args["output"] != ""
+        open(parsed_args["output"], "w") do io
+            println(io, summary)
+        end
+    end
+    return result
+end
+
 
 function run_from_arguments(arguments::Vector{String})
     parsed_args = parse_args(arguments, settings)
@@ -164,6 +221,8 @@ function run_from_arguments(arguments::Vector{String})
         run_dot(parsed_args["run"])
     elseif parsed_args["%COMMAND%"] == "ctransfer"
         run_ctransfer(parsed_args["ctransfer"])
+    elseif parsed_args["%COMMAND%"] == "cellsim"
+        run_cellsim(parsed_args["cellsim"])
     end
 end
 

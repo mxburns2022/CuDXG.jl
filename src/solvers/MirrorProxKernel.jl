@@ -674,35 +674,6 @@ function warp_logsumexp_spp_ct_opt_smem_fused!(output::CuDeviceVector{T}, img1::
             end
             
         end
-        # sync_threads()
-        # if local_id <= epi_size
-        #     @inbounds begin
-        #         pix2r = smem[local_id+1]
-        #         pix2g = smem[local_id+smemsize+1]
-        #         pix2b = smem[local_id+2smemsize+1]
-        #         muval = smem[local_id+3smemsize+1]
-        #         dr = (pix1r - pix2r)
-        #         dg = (pix1g - pix2g)
-        #         db = (pix1b - pix2b)
-        #         if p == 1
-        #             l2dist = abs(dr) + abs(dg) + abs(db)
-        #         elseif p == 2
-        #             l2dist = muladd(dr, dr, muladd(dg, dg, muladd(db, db, 0)))
-        #         elseif p == Inf
-        #             l2dist = max(abs(dr), max(abs(dg), abs(db)))
-        #         else
-        #             l2dist = abs(dr)^p + abs(dg)^p+ abs(db)^p
-        #         end
-        #         v = -(muladd(l2dist, c1, muval)) * invreg
-        #         # end
-        #         if v <= m_local
-        #             s_local += exp(v - m_local)
-        #         else
-        #             s_local = s_local * exp(m_local - v) + one(T)
-        #             m_local = v
-        #         end
-        #     end
-        # end
         m = shfl_down_sync(0xffffffff, m_local, 16)
         s = shfl_down_sync(0xffffffff, s_local, 16)
         m_local, s_local = _lse_pair_combine((m_local, s_local), (m, s))
