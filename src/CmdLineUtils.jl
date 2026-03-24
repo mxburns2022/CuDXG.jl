@@ -18,6 +18,7 @@ ctransfer_solvers = Dict(
 cellsim_solvers = Dict(
     "lamp" => extragradient_cell_distance,
     "sinkhorn" => sinkhorn_cell_distance,
+    "annealed_sinkhorn" => annealed_sinkhorn_cell_distance,
 )
 settings = ArgParseSettings(prog="culamp")
 @add_arg_table! settings begin
@@ -133,6 +134,14 @@ end
     help = "L1-normalize each feature across cells before kernel distances are evaluated"
     default = true
     arg_type = Bool
+    "--num-features"
+    help = "Number of features to include"
+    default = typemax(Int)
+    arg_type = Int
+    "--num-cells"
+    help = "Number of cells to include"
+    default = typemax(Int)
+    arg_type = Int
     "--output"
     help = "Optional output path for a one-line summary"
     default = ""
@@ -198,6 +207,8 @@ function run_cellsim(parsed_args)
     solver = cellsim_solvers[parsed_args["algorithm"]]
     result = compute_otscomics_c_index(
         parsed_args["file"],
+        parsed_args["num-features"],
+        parsed_args["num-cells"],
         args;
         metric=metric,
         normalize_features=parsed_args["normalize-features"],

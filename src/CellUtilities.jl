@@ -1,5 +1,6 @@
 using CUDA
 using Statistics
+using StatsBase
 
 const CELL_COST_METRICS = ("l1", "l2", "cosine", "pearson", "correlation")
 
@@ -46,14 +47,21 @@ function _read_otscomics_table(fpath::String)
     return CSV.read(fpath, DataFrame)
 end
 
-function read_otscomics_cell_data(fpath::String)
+function read_otscomics_cell_data(fpath::String, num_features::Int, numcells::Int)
     table = _read_otscomics_table(fpath)
     ncol(table) >= 2 || throw(ArgumentError("Expected at least one feature column and one cell column in $(fpath)"))
+    rng = Xoshiro(0)
     feature_names = String.(table[:, 1])
     cell_names = String.(names(table)[2:end])
-    data = Float64.(Matrix(table[:, 2:end]))
-    clusters = [String(i) for i in infer_cell_clusters(cell_names)]
-    return OTScOmicsCellData(data, feature_names, cell_names, clusters)
+    random_cells = sample(rng, [1:size(cell_names,1)...], numcells, replace = false)
+    data = Float64.(Matrix(table[:, 2:end]))[:, random_cells]
+    num_features = min(num_features, size(data, 1))
+    numcells = min(numcells, size(data, 2))
+    selected_features = sortperm(Statistics.std(data, dims=2), dims=1, rev=true)[1:num_features]
+    data = data[selected_features,:]
+    clusters = [String(i) for i in infer_cell_clusters(cell_names[random_cells])]
+    println(clusters)
+    return OTScOmicsCellData(data, feature_names[selected_features], cell_names[random_cells], clusters)
 end
 
 function row_scales(data::AbstractMatrix{T}, normalize_features::Bool) where T<:Real

@@ -22,6 +22,7 @@ end
     alpha::R = 0.01
     B::R = 1.0
     epsilon::R = 1e-4
+    anneal_mult::R = 0.95
     itermax::Int = 10_000
     inner_iter::Int = 10
     tmax::Float64 = Inf

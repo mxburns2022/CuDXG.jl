@@ -146,19 +146,21 @@ function extragradient_cellsim(
             infeas(ν, ηt, st)
             CUDA.synchronize()
             residual_value = sum(abs.(residual_cache - marginal2))
-            objective = W∞ * sum(cost_cache)
-            primal_value = W∞ * sum(cost_cache) * (1 - η / ηt) - 2η * dot(marginal1, sumvals) - 2W∞ * η / ηt * dot(marginal2, ν) + 2hr + 2W∞ * residual_value
+            objective = sum(cost_cache)
             if η > 0
+                primal_value =  objective * (1 - η / ηt) - 2η * dot(marginal1, sumvals) - 2W∞ * η / ηt * dot(marginal2, ν) + 2hr + 2W∞ * residual_value
                 @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_sim_fused!(sumvals, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, metric, θ, η, one(T), W∞)
                 dual_value = -2η * dot(marginal1, sumvals) - 2W∞ * dot(marginal2, θ) + 2hr
             else
+                primal_value = objective + 2W∞ * residual_value
                 @cuda threads = threads blocks = warp_blocks warp_min_reduce_cellsim!(sumvals, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, metric, θ, W∞)
+                CUDA.synchronize()
                 dual_value = dot(marginal1, sumvals) - 2W∞ * dot(marginal2, θ)
             end
 
             CUDA.synchronize()
 
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,lamp_kernel\n" elapsed_time i residual_value objective primal_value dual_value
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,%.14e,lamp_kernel\n" elapsed_time i residual_value objective primal_value dual_value primal_value-dual_value
             if primal_value - dual_value < args.epsilon / 6 && residual_value < args.epsilon / 6
                 break
             end
@@ -179,7 +181,7 @@ function extragradient_cellsim(
 
     ψ = -2W∞ * ν ./ args.eta_p
     φ = log.(marginal1) - sumvals
-    objective = W∞_scaling * sum(cost_cache)
+    objective = sum(cost_cache)
     return Array(ν), Array(φ), Array(ψ), objective
 end
 

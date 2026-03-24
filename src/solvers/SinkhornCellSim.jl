@@ -245,12 +245,20 @@ function sinkhorn_cellsim(
     marginal1::CuArray{T},
     marginal2::CuArray{T},
     args::EOTArgs,
-    frequency::Int=100,
+    frequency::Int=100;
+    return_cuda = false,
+    φ0::Union{CuArray{T}, typeof(Nothing)}=Nothing,
+    ψ0::Union{CuArray{T}, typeof(Nothing)}=Nothing
 ) where T<:Real
     N = size(data1, 1)
     M = size(data2, 1)
-    φ = CUDA.zeros(T, N)
-    ψ = CUDA.zeros(T, M)
+    if φ0 == Nothing
+        φ = CUDA.zeros(T, N)
+        ψ = CUDA.zeros(T, M)
+    else
+        φ = φ0
+        ψ = ψ0
+    end
     residual_cache = CUDA.zeros(T, N)
     cost_cache = CUDA.zeros(T, N)
     row_sums1, row_sqnorms1, row_means1, row_centered_sqnorms1 = get_flat_metrics(data1)
@@ -258,10 +266,13 @@ function sinkhorn_cellsim(
     threads = 256
     blocks = div(N, div(threads, 32, RoundDown), RoundUp)
     time_start = time_ns()
-    η = args.eta_p
     @cuda threads = threads blocks = blocks max_logsumexp_cellsim!(residual_cache, data1, row_sums1, row_sqnorms1, row_means1, row_centered_sqnorms1, scale, metric)
     W∞ = maximum(residual_cache)
-    println("time(s),iter,infeas,ot_objective,dual")
+    η = args.eta_p / 2W∞
+    num_iter = 0
+    if args.verbose
+        println("time(s),iter,infeas,ot_objective,dual")
+    end
     for i in 1:args.itermax
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
@@ -270,20 +281,30 @@ function sinkhorn_cellsim(
         @cuda threads = threads blocks = blocks warp_logsumexp_cellsim_fused!(φ, data1, data2, row_sums1, row_sqnorms1, row_means1, row_centered_sqnorms1, row_sums2, row_sqnorms2, row_means2, row_centered_sqnorms2, scale, metric, marginal1, ψ, η, W∞)
         @cuda threads = threads blocks = div(M, div(threads, 32, RoundDown), RoundUp) warp_logsumexp_cellsim_fused!(ψ, data2, data1, row_sums2, row_sqnorms2, row_means2, row_centered_sqnorms2, row_sums1, row_sqnorms1, row_means1, row_centered_sqnorms1, scale, metric, marginal2, φ, η, W∞)
         CUDA.synchronize()
-        if args.verbose && (i - 1) % frequency == 0
+        if (i - 1) % frequency == 0
             @cuda threads = threads blocks = blocks residual_cellsim_opt!(residual_cache, cost_cache, data1, data2, row_sums1, row_sqnorms1, row_means1, row_centered_sqnorms1, row_sums2, row_sqnorms2, row_means2, row_centered_sqnorms2, scale, metric, marginal1, φ, ψ, η, W∞)
             CUDA.synchronize()
+            
             residual_r = norm(residual_cache, 1)
-            ot_objective = W∞ * sum(cost_cache)
-            objective = W∞ * (dot(ψ, marginal2) + dot(φ, marginal1))
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,sinkhorn_cellsim\n" elapsed_time i residual_r ot_objective objective
+            if args.verbose
+                ot_objective = W∞ * sum(cost_cache)
+                objective = W∞ * (dot(ψ, marginal2) + dot(φ, marginal1))
+                @printf "%.6e,%d,%.14e,%.14e,%.14e,sinkhorn_cellsim\n" elapsed_time i residual_r ot_objective objective
+            end
             if residual_r <= args.epsilon / 6
                 break
             end
         end
+
+        num_iter += 1
     end
     @cuda threads = threads blocks = blocks residual_cellsim_opt!(residual_cache, cost_cache, data1, data2, row_sums1, row_sqnorms1, row_means1, row_centered_sqnorms1, row_sums2, row_sqnorms2, row_means2, row_centered_sqnorms2, scale, metric, marginal1, φ, ψ, η, W∞)
     CUDA.synchronize()
     objective = W∞ * sum(cost_cache)
-    return Array(φ), Array(ψ), objective
+    residual_val = sum(abs.(residual_cache))
+    if return_cuda
+        return φ, ψ, objective, residual_val, num_iter
+    else
+        return Array(φ), Array(ψ), objective, residual_val
+    end
 end

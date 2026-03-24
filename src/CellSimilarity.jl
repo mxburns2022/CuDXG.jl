@@ -44,6 +44,29 @@ function sinkhorn_cell_distance(
     return T(objective)
 end
 
+function annealed_sinkhorn_cell_distance(
+    feature_ids1::AbstractVector{<:Integer},
+    feature_ids2::AbstractVector{<:Integer},
+    marginal1::AbstractVector{T},
+    marginal2::AbstractVector{T},
+    data::CuArray{T,2},
+    row_sums::CuArray{T,1},
+    row_sqnorms::CuArray{T,1},
+    row_means::CuArray{T,1},
+    row_centered_sqnorms::CuArray{T,1},
+    scale::T,
+    metric::Symbol,
+    args::EOTArgs,
+    frequency::Int;
+) where T<:Real
+    length(feature_ids1) == size(data, 1) || throw(ArgumentError("feature_ids1 length must match the number of features"))
+    length(feature_ids2) == size(data, 1) || throw(ArgumentError("feature_ids2 length must match the number of features"))
+    marginal1_gpu = CuArray(marginal1)
+    marginal2_gpu = CuArray(marginal2)
+    _, _, objective = annealed_sinkhorn_cellsim(data, data, scale, metric, marginal1_gpu, marginal2_gpu, args, frequency)
+    return T(objective)
+end
+
 function maxheap_sift_up!(heap::Vector{T}, idx::Int) where T
     i = idx
     while i > 1
@@ -144,6 +167,7 @@ function streaming_c_index(
     args::EOTArgs;
     frequency::Int=100,
     solver::Function=extragradient_cell_distance,
+    solver_kwargs...,
 ) where T<:Real
     ncells = length(cell_data.cell_names)
     nfeatures = size(cell_data.data, 1)
@@ -166,14 +190,13 @@ function streaming_c_index(
 
     npairs = ncells * (ncells - 1) ÷ 2
     processed = 0
-    println(size(feature_ids), " ", ncells)
     for i in 1:ncells
         fill_normalized_cell!(marginal_i, cell_data.data, i, column_sums)
+        marginal_i .+= 1e-5
+        normalize!(marginal_i, 1)
         for j in 1:(i-1)
             fill_normalized_cell!(marginal_j, cell_data.data, j, column_sums)
-            marginal_i .+= 1e-7
-            marginal_j .+= 1e-7
-            normalize!(marginal_i, 1)
+            marginal_j .+= 1e-5
             normalize!(marginal_j, 1)
             distance = solver(
                 feature_ids,
@@ -189,7 +212,9 @@ function streaming_c_index(
                 kernel.metric,
                 args,
                 frequency,
+                solver_kwargs...,
             )
+            
             cell_data.clusters[i] == cell_data.clusters[j] && (sw += distance)
             smin = push_smallest!(smallest_heap, smin, distance, nw)
             smax = push_largest!(largest_heap, smax, distance, nw)
@@ -215,13 +240,16 @@ end
 
 function compute_otscomics_c_index(
     fpath::String,
+    num_features::Int,
+    num_cells::Int,
     args::EOTArgs;
     metric::AbstractString="correlation",
     normalize_features::Bool=true,
     frequency::Int=100,
     solver::Function=extragradient_cell_distance,
+    solver_kwargs...,
 )
-    cell_data = read_otscomics_cell_data(fpath)
+    cell_data = read_otscomics_cell_data(fpath, num_features, num_cells)
     kernel = CellCostKernel(cell_data.data, metric; normalize_features=normalize_features)
-    return streaming_c_index(cell_data, kernel, args; frequency=frequency, solver=solver)
+    return streaming_c_index(cell_data, kernel, args; frequency=frequency, solver=solver, solver_kwargs...)
 end

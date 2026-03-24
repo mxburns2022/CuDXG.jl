@@ -13,6 +13,7 @@ include("solvers/Sinkhorn.jl")
 include("solvers/DualExtrapolation.jl")
 include("solvers/SinkhornKernel.jl")
 include("solvers/SinkhornCellSim.jl")
+include("solvers/AnnealedSinkhornCellSim.jl")
 include("solvers/AccBregmanDescent.jl")
 include("solvers/APDAMD.jl")
 include("solvers/APDAGD.jl")
@@ -25,11 +26,13 @@ export OTScOmicsCellData, CellCostKernel, read_otscomics_cell_data, infer_cell_c
 export extragradient_ot, LAMP, extragradient_ot_full_dual, extragradient_barycenter_dual
 export extragradient_cellsim
 export sinkhorn_cellsim
+export annealed_sinkhorn_cellsim
 export sinkhorn_log
 export EOTArgs, load_rgb, save_image
 export run_from_arguments, solvers, sinkhorn_color_transfer, extragradient_color_transfer, accelerated_bregman_descent_transfer, accelerated_bregman_descent, dual_extrapolation
 export extragradient_cell_distance, streaming_c_index, compute_otscomics_c_index
 export sinkhorn_cell_distance
+export annealed_sinkhorn_cell_distance
 export warp_logsumexp_spp_ct_opt!, warp_logsumexp_spp_ct_fused!, warp_logsumexp_spp_opt!, warp_logsumexp_fused!, warp_logsumexp!,warp_logsumexp_spp_ct_opt_smem!,warp_logsumexp_spp_ct_opt_smem_fused!,naive_logsumexp_spp_ct!
 
 end
