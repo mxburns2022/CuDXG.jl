@@ -14,17 +14,25 @@ const OUTPUT_DIRECTORY = joinpath(REPO_ROOT, "data", "experiment_cellsim_broad")
 Run cell-similarity solvers on a fixed OT-scOmics dataset while varying
 the number of features and the feature-cost metric.
 """
-function main()
+function main(argval)
     mkpath(OUTPUT_DIRECTORY)
 
     dataset_name = splitext(splitext(basename(DATASET_FILE))[1])[1]
-    num_cells = 50
-    feature_counts = [1000, 2000, 3000, 4000, 5000, 6000]
-    costs = ["l1", "l2", "cosine", "correlation"]
+    num_cells = 20
+    num_subproblems = 10
+    if parse(Int, argval) == 1
+        costs = ["cosine", "correlation"]
+    else
+        costs = ["l1", "l2"]
+    end
+        
+    feature_counts = [1000, 2500, 5000, 7500, 10000]
+    
     algorithms = ["lamp", "sinkhorn", "annealed_sinkhorn"]
-
-    for (solver, num_features, cost) in product(algorithms, feature_counts, costs)
-        println((dataset_name, num_cells, num_features, cost, solver))
+    niters = size(algorithms, 1) * size(feature_counts, 1) * size(costs, 1)
+    i = 0
+    for (solver, cost, num_features) in product(algorithms, costs, feature_counts)
+        println((round(i / niters * 100), dataset_name, num_cells, num_features, cost, solver))
         flush(stdout)
 
         input_file = joinpath(REPO_ROOT, "configurations", "cellsim", "$(solver).json")
@@ -37,13 +45,14 @@ function main()
             "cellsim",
             "--algorithm", solver,
             "--settings", input_file,
-            "--frequency", "25",
+            "--frequency", "250",
             "--cost", cost,
             "--num-features", string(num_features),
             "--num-cells", string(num_cells),
+            "--num-subproblems", string(num_subproblems),
             DATASET_FILE,
         ]
-
+        
         output_log = @capture_out begin
             run_from_arguments(arglist)
         end
@@ -51,9 +60,10 @@ function main()
         open(joinpath(OUTPUT_DIRECTORY, output_file), "w") do fout
             write(fout, output_log)
         end
+        i += 1
     end
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    main()
+    main(ARGS[1])
 end

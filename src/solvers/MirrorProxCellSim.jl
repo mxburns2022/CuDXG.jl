@@ -160,7 +160,7 @@ function extragradient_cellsim(
 
             CUDA.synchronize()
 
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,%.14e,lamp_kernel\n" elapsed_time i residual_value objective primal_value dual_value primal_value-dual_value
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,lamp_kernel\n" elapsed_time i residual_value objective primal_value dual_value
             if primal_value - dual_value < args.epsilon / 6 && residual_value < args.epsilon / 6
                 break
             end

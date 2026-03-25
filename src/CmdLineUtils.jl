@@ -138,6 +138,10 @@ end
     help = "Number of features to include"
     default = typemax(Int)
     arg_type = Int
+    "--num-subproblems"
+    help = "Number of subproblems to run (limits pairwise comparisons, just for benchmarking)"
+    default = typemax(Int)
+    arg_type = Int
     "--num-cells"
     help = "Number of cells to include"
     default = typemax(Int)
@@ -208,6 +212,7 @@ function run_cellsim(parsed_args)
     result = compute_otscomics_c_index(
         parsed_args["file"],
         parsed_args["num-features"],
+        parsed_args["num-subproblems"],
         parsed_args["num-cells"],
         args;
         metric=metric,

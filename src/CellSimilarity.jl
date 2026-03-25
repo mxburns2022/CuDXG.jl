@@ -164,7 +164,8 @@ end
 function streaming_c_index(
     cell_data::OTScOmicsCellData{T},
     kernel::CellCostKernel{T},
-    args::EOTArgs;
+    args::EOTArgs,
+    num_subproblems::Int;
     frequency::Int=100,
     solver::Function=extragradient_cell_distance,
     solver_kwargs...,
@@ -191,12 +192,14 @@ function streaming_c_index(
     npairs = ncells * (ncells - 1) ÷ 2
     processed = 0
     for i in 1:ncells
+        println(stderr, "$(i/ncells)")
+        flush(stderr)
         fill_normalized_cell!(marginal_i, cell_data.data, i, column_sums)
-        marginal_i .+= 1e-5
+        marginal_i .+= 1e-7
         normalize!(marginal_i, 1)
         for j in 1:(i-1)
             fill_normalized_cell!(marginal_j, cell_data.data, j, column_sums)
-            marginal_j .+= 1e-5
+            marginal_j .+= 1e-7
             normalize!(marginal_j, 1)
             distance = solver(
                 feature_ids,
@@ -219,14 +222,26 @@ function streaming_c_index(
             smin = push_smallest!(smallest_heap, smin, distance, nw)
             smax = push_largest!(largest_heap, smax, distance, nw)
             processed += 1
-            if frequency > 0 && processed % frequency == 0
-                println("processed_pairs=$(processed)/$(npairs)")
+            
+            println(stderr, "processed_pairs=$(processed)/$(npairs)")
+            flush(stderr)
+            if processed > num_subproblems
+                break
             end
+        end
+        if processed > num_subproblems
+            break
         end
     end
 
     denominator = smax - smin
-    denominator > zero(T) || throw(ArgumentError("Degenerate C-index denominator; pairwise distances do not separate within/between cluster pairs"))
+    if num_subproblems >= npairs
+        denominator > zero(T) || throw(ArgumentError("Degenerate C-index denominator; pairwise distances do not separate within/between cluster pairs"))
+    elseif denominator < 1e-10
+        denominator = 1.0
+        println(stderr, "WARNING: Insufficient pairs considered, disregard similarity output. Only use data for solver comparison")
+        flush(stderr)
+    end
 
     return (
         c_index = (sw - smin) / denominator,
@@ -241,6 +256,7 @@ end
 function compute_otscomics_c_index(
     fpath::String,
     num_features::Int,
+    num_subproblems::Int,
     num_cells::Int,
     args::EOTArgs;
     metric::AbstractString="correlation",
@@ -251,5 +267,5 @@ function compute_otscomics_c_index(
 )
     cell_data = read_otscomics_cell_data(fpath, num_features, num_cells)
     kernel = CellCostKernel(cell_data.data, metric; normalize_features=normalize_features)
-    return streaming_c_index(cell_data, kernel, args; frequency=frequency, solver=solver, solver_kwargs...)
+    return streaming_c_index(cell_data, kernel, args, num_subproblems; frequency=frequency, solver=solver, solver_kwargs...)
 end

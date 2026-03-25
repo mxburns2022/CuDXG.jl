@@ -60,7 +60,6 @@ function read_otscomics_cell_data(fpath::String, num_features::Int, numcells::In
     selected_features = sortperm(Statistics.std(data, dims=2), dims=1, rev=true)[1:num_features]
     data = data[selected_features,:]
     clusters = [String(i) for i in infer_cell_clusters(cell_names[random_cells])]
-    println(clusters)
     return OTScOmicsCellData(data, feature_names[selected_features], cell_names[random_cells], clusters)
 end
 
