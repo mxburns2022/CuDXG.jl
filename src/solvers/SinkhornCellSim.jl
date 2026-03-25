@@ -268,7 +268,7 @@ function sinkhorn_cellsim(
     time_start = time_ns()
     @cuda threads = threads blocks = blocks max_logsumexp_cellsim!(residual_cache, data1, row_sums1, row_sqnorms1, row_means1, row_centered_sqnorms1, scale, metric)
     W∞ = maximum(residual_cache)
-    η = args.eta_p / 2W∞
+    η = args.eta_p
     num_iter = 0
     if args.verbose
         println("time(s),iter,infeas,ot_objective,dual")
@@ -287,8 +287,8 @@ function sinkhorn_cellsim(
             
             residual_r = norm(residual_cache, 1)
             if args.verbose
-                ot_objective = W∞ * sum(cost_cache)
-                objective = W∞ * (dot(ψ, marginal2) + dot(φ, marginal1))
+                ot_objective = sum(cost_cache)
+                objective = (dot(ψ, marginal2) + dot(φ, marginal1))
                 @printf "%.6e,%d,%.14e,%.14e,%.14e,sinkhorn_cellsim\n" elapsed_time i residual_r ot_objective objective
             end
             if residual_r <= args.epsilon / 6
@@ -300,7 +300,7 @@ function sinkhorn_cellsim(
     end
     @cuda threads = threads blocks = blocks residual_cellsim_opt!(residual_cache, cost_cache, data1, data2, row_sums1, row_sqnorms1, row_means1, row_centered_sqnorms1, row_sums2, row_sqnorms2, row_means2, row_centered_sqnorms2, scale, metric, marginal1, φ, ψ, η, W∞)
     CUDA.synchronize()
-    objective = W∞ * sum(cost_cache)
+    objective = sum(cost_cache)
     residual_val = sum(abs.(residual_cache))
     if return_cuda
         return φ, ψ, objective, residual_val, num_iter

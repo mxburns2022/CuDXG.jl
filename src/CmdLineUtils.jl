@@ -209,6 +209,7 @@ function run_cellsim(parsed_args)
     args = read_args_json(parsed_args["settings"])
     metric = normalize_cell_cost_metric(parsed_args["cost"])
     solver = cellsim_solvers[parsed_args["algorithm"]]
+    println("Normalize features:", parsed_args["normalize-features"])
     result = compute_otscomics_c_index(
         parsed_args["file"],
         parsed_args["num-features"],

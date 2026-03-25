@@ -115,7 +115,7 @@ function extragradient_cellsim(
     @cuda threads = threads blocks = warp_blocks max_logsumexp_cellsim!(sumvals, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, metric)
     CUDA.synchronize()
     W∞ = maximum(sumvals)
-    η = T(args.eta_p) / 2W∞
+    η = T(args.eta_p)
 
     eta_mu = (marginal2 .+ T(args.alpha) / N) / args.tau_mu
     time_start = time_ns()
@@ -137,6 +137,7 @@ function extragradient_cellsim(
     τp = one(T)
     minv = tanh(-args.B / 2)
     maxv = tanh(args.B / 2)
+    γ = copy(θ)
     for i in 1:args.itermax
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
@@ -148,14 +149,14 @@ function extragradient_cellsim(
             residual_value = sum(abs.(residual_cache - marginal2))
             objective = sum(cost_cache)
             if η > 0
-                primal_value =  objective * (1 - η / ηt) - 2η * dot(marginal1, sumvals) - 2W∞ * η / ηt * dot(marginal2, ν) + 2hr + 2W∞ * residual_value
+                primal_value =  objective * (1 - η / ηt) - η * dot(marginal1, sumvals) - 2W∞ * η / ηt * dot(marginal2, ν) + hr + 2W∞ * residual_value
                 @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_sim_fused!(sumvals, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, metric, θ, η, one(T), W∞)
-                dual_value = -2η * dot(marginal1, sumvals) - 2W∞ * dot(marginal2, θ) + 2hr
+                dual_value = -η * dot(marginal1, sumvals) - 2W∞ * dot(marginal2, θ) + hr
             else
                 primal_value = objective + 2W∞ * residual_value
-                @cuda threads = threads blocks = warp_blocks warp_min_reduce_cellsim!(sumvals, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, metric, θ, W∞)
+                @cuda threads = threads blocks = warp_blocks warp_min_reduce_cellsim!(sumvals, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, metric, γ, W∞)
                 CUDA.synchronize()
-                dual_value = dot(marginal1, sumvals) - 2W∞ * dot(marginal2, θ)
+                dual_value = dot(marginal1, sumvals) - 2W∞ * dot(marginal2, γ)
             end
 
             CUDA.synchronize()
@@ -169,12 +170,13 @@ function extragradient_cellsim(
         @cuda threads = threads blocks = linear_blocks update_θ_residual(θ̄, θ, residual_cache, marginal2, eta_mu, T(args.eta_mu), false, minv, maxv, one(T))
         ηt = one(T) / (τp + (one(T) / ηt) * (one(T) - η))
         ν̄ .= (one(T) - ηt) * ν + ηt * θ
-
+        
         CUDA.synchronize()
         st = (one(T) - ηt) * st + ηt
         infeas(ν̄, ηt, st)
         @cuda threads = threads blocks = linear_blocks update_θ_residual(θ, θ, residual_cache, marginal2, eta_mu, T(args.eta_mu), true, minv, maxv, one(T))
         ν .= (one(T) - ηt) * ν + ηt * θ̄
+        γ .= (one(T) - ηt) * γ + ηt * θ
 
         CUDA.synchronize()
     end

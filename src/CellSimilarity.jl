@@ -225,11 +225,11 @@ function streaming_c_index(
             
             println(stderr, "processed_pairs=$(processed)/$(npairs)")
             flush(stderr)
-            if processed > num_subproblems
+            if processed >= num_subproblems
                 break
             end
         end
-        if processed > num_subproblems
+        if processed >= num_subproblems
             break
         end
     end

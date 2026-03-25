@@ -19,14 +19,14 @@ function main(argval)
 
     dataset_name = splitext(splitext(basename(DATASET_FILE))[1])[1]
     num_cells = 20
-    num_subproblems = 10
+    num_subproblems = 1
     if parse(Int, argval) == 1
         costs = ["cosine", "correlation"]
     else
         costs = ["l1", "l2"]
     end
         
-    feature_counts = [1000, 2500, 5000, 7500, 10000]
+    feature_counts = [500]
     
     algorithms = ["lamp", "sinkhorn", "annealed_sinkhorn"]
     niters = size(algorithms, 1) * size(feature_counts, 1) * size(costs, 1)
