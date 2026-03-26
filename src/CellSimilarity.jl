@@ -263,9 +263,10 @@ function compute_otscomics_c_index(
     normalize_features::Bool=true,
     frequency::Int=100,
     solver::Function=extragradient_cell_distance,
+    seed::Int=0,
     solver_kwargs...,
 )
-    cell_data = read_otscomics_cell_data(fpath, num_features, num_cells)
+    cell_data = read_otscomics_cell_data(fpath, num_features, num_cells, seed)
     kernel = CellCostKernel(cell_data.data, metric; normalize_features=normalize_features)
     return streaming_c_index(cell_data, kernel, args, num_subproblems; frequency=frequency, solver=solver, solver_kwargs...)
 end

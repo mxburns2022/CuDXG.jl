@@ -47,10 +47,10 @@ function _read_otscomics_table(fpath::String)
     return CSV.read(fpath, DataFrame)
 end
 
-function read_otscomics_cell_data(fpath::String, num_features::Int, numcells::Int)
+function read_otscomics_cell_data(fpath::String, num_features::Int, numcells::Int, seed::Int)
     table = _read_otscomics_table(fpath)
     ncol(table) >= 2 || throw(ArgumentError("Expected at least one feature column and one cell column in $(fpath)"))
-    rng = Xoshiro(0)
+    rng = Xoshiro(seed)
     feature_names = String.(table[:, 1])
     cell_names = String.(names(table)[2:end])
     random_cells = sample(rng, [1:size(cell_names,1)...], numcells, replace = false)

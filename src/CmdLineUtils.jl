@@ -142,6 +142,10 @@ end
     help = "Number of subproblems to run (limits pairwise comparisons, just for benchmarking)"
     default = typemax(Int)
     arg_type = Int
+    "--seed"
+    help = "Random seed for cell selection"
+    default = 0
+    arg_type = Int
     "--num-cells"
     help = "Number of cells to include"
     default = typemax(Int)
@@ -209,7 +213,6 @@ function run_cellsim(parsed_args)
     args = read_args_json(parsed_args["settings"])
     metric = normalize_cell_cost_metric(parsed_args["cost"])
     solver = cellsim_solvers[parsed_args["algorithm"]]
-    println("Normalize features:", parsed_args["normalize-features"])
     result = compute_otscomics_c_index(
         parsed_args["file"],
         parsed_args["num-features"],
@@ -220,6 +223,7 @@ function run_cellsim(parsed_args)
         normalize_features=parsed_args["normalize-features"],
         frequency=parsed_args["frequency"],
         solver=solver,
+        seed=parsed_args["seed"]
     )
     summary = "c_index=$(result.c_index),Sw=$(result.Sw),Smin=$(result.Smin),Smax=$(result.Smax),Nw=$(result.Nw),pairs=$(result.pairs)"
     println(summary)
