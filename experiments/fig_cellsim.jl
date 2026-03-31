@@ -58,9 +58,9 @@ function main(argval)
             run_from_arguments(arglist)
         end
 
-        open(joinpath(OUTPUT_DIRECTORY, output_file), "w") do fout
-            write(fout, output_log)
-        end
+        # open(joinpath(OUTPUT_DIRECTORY, output_file), "w") do fout
+        #     write(fout, output_log)
+        # end
         i += 1
     end
 end

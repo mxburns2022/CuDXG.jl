@@ -4,6 +4,7 @@ solvers = Dict(
     "lamp" => LAMP,
     "pdmp" => PDMP,
     "sinkhorn" => sinkhorn_log,
+    "annealed_sinkhorn" => annealed_sinkhorn_log,
     "greenkhorn" => greenkhorn_log,
     "apdamd" => APDAMD,
     "apdagd" => APDAGD,
@@ -54,7 +55,7 @@ end
     help = "Path to CSV-formatted weight matrix"
     default = ""
     "--kernel"
-    help = "Use kernels to compute OT matrices on the fly (only dual_extragradient and sinkhorn are supported)"
+    help = "Use kernels to compute OT matrices on the fly (supported: lamp, sinkhorn, annealed_sinkhorn)"
     action = :store_true
     "--frequency"
     help = "Printing frequency"
@@ -193,6 +194,8 @@ function run_dot(parsed_args)
         # locations2 = CuArray(locations)
         if parsed_args["algorithm"] == "sinkhorn"
             sinkhorn_euclidean(r, c, locations, locations, parsed_args["output1"], parsed_args["output2"], parsed_args["potential-out"], args, parsed_args["frequency"], parsed_args["p"])
+        elseif parsed_args["algorithm"] == "annealed_sinkhorn"
+            annealed_sinkhorn_euclidean(r, c, locations, locations, parsed_args["output1"], parsed_args["output2"], parsed_args["potential-out"], args, parsed_args["frequency"], parsed_args["p"])
         elseif parsed_args["algorithm"] == "lamp"
             extragradient_euclidean(r, c, locations, locations, parsed_args["output1"], parsed_args["output2"], parsed_args["potential-out"], args, parsed_args["frequency"], parsed_args["p"])
         end

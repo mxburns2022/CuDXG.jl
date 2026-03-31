@@ -13,6 +13,7 @@ include("solvers/Sinkhorn.jl")
 include("solvers/DualExtrapolation.jl")
 include("solvers/SinkhornKernel.jl")
 include("solvers/SinkhornCellSim.jl")
+include("solvers/AnnealedSinkhorn.jl")
 include("solvers/AnnealedSinkhornCellSim.jl")
 include("solvers/AccBregmanDescent.jl")
 include("solvers/APDAMD.jl")
@@ -28,6 +29,7 @@ export extragradient_cellsim
 export sinkhorn_cellsim
 export annealed_sinkhorn_cellsim
 export sinkhorn_log
+export annealed_sinkhorn_log, annealed_sinkhorn_euclidean
 export EOTArgs, load_rgb, save_image
 export run_from_arguments, solvers, sinkhorn_color_transfer, extragradient_color_transfer, accelerated_bregman_descent_transfer, accelerated_bregman_descent, dual_extrapolation
 export extragradient_cell_distance, streaming_c_index, compute_otscomics_c_index

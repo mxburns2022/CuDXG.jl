@@ -474,10 +474,22 @@ end
     return val
 end
 
-function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::CuArray{T}, marginal2::CuArray{T}, args::EOTArgs, frequency::Int=100, p::Union{Int, Float64} = 2) where T<:Real
+function sinkhorn_color_transfer(
+    img1::CuArray{T},
+    img2::CuArray{T},
+    marginal1::CuArray{T},
+    marginal2::CuArray{T},
+    args::EOTArgs,
+    frequency::Int=100,
+    p::Union{Int, Float64}=2;
+    return_cuda::Bool=false,
+    return_assignments::Bool=true,
+    φ0::Union{CuArray{T}, Nothing}=nothing,
+    ψ0::Union{CuArray{T}, Nothing}=nothing,
+) where T<:Real
     N = size(img1, 2)
-    φ = CUDA.zeros(T, N)
-    ψ = CUDA.zeros(T, N)
+    φ = isnothing(φ0) ? CUDA.zeros(T, N) : copy(φ0)
+    ψ = isnothing(ψ0) ? CUDA.zeros(T, N) : copy(ψ0)
     residual_cache = CUDA.zeros(T, N)
     cost_cache = CUDA.zeros(T, N)
     threads = 256
@@ -492,7 +504,10 @@ function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::
     # else
     #     W∞ = 1.0
     # end
-    println("time(s),iter,infeas,ot_objective,dual")
+    if args.verbose
+        println("time(s),iter,infeas,ot_objective,dual")
+    end
+    num_iter = 0
     for i in 1:args.itermax
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
@@ -517,6 +532,17 @@ function sinkhorn_color_transfer(img1::CuArray{T}, img2::CuArray{T}, marginal1::
                 break
             end
         end
+        num_iter += 1
+    end
+    @cuda threads = threads blocks = blocks residual_opt!(residual_cache, cost_cache, img1, img2, marginal1, φ, ψ, η, W∞, p)
+    CUDA.synchronize()
+    residual_val = norm(residual_cache, 1)
+    objective = W∞ * sum(cost_cache)
+    if !return_assignments
+        if return_cuda
+            return φ, ψ, objective, residual_val, num_iter
+        end
+        return Array(φ), Array(ψ), objective, residual_val
     end
     output_img1 = CUDA.zeros(T, 3, N)
     output_img2 = CUDA.zeros(T, 3, N)

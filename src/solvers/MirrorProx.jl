@@ -6,7 +6,7 @@ using Test
 
 function dualv(theta, W, W∞, ηp, r, c)
     if ηp == 0
-        return sum(-dot(c, W∞ .* (theta))) + sum(r'*minimum((0.5*W .+ W∞ .*theta'), dims=2))
+        return sum(-dot(c, 2W∞ .* (theta))) + sum(r'*minimum((W .+ 2W∞ .*theta'), dims=2))
     end
     lse = logsumexp(-(0.5*W .+ (W∞ .* theta)') ./ ηp, 2)
     return 2 * ((-W∞ * sum(c' * theta) - ηp * sum(r' *lse)) + ηp * dot(r, log.(r)))
@@ -431,7 +431,7 @@ function LAMP(r::CuArray{R},
             p = softmax(-(W * 0.5 / W∞ .+ ν') ./ ηt, norm_dims=2)
             obj = dot(W, round(r .* p, r, c))
             # pr = r .* p
-            primal_value = primalv(ν, W, W∞, ηt, ηp, r, c)
+            primal_value = primalv(p, W, W∞, ηp, r, c)
             dual_value = dualv(θ, W, W∞, ηp, r, c)
             # feas = norm(sum(pr, dims=1)' - c, 1)
             feas = norm(c - sum((r.*p)', dims=2) , 1)
@@ -489,12 +489,12 @@ function LAMP(r::AbstractArray{R},
     time_start = time_ns()
     function infeas(θ, ηt)
 
-        maximum!(maxvals, -(0.5W * st / W∞ .+ θ') ./ ηt)
-
-        sum!(sumvals, exp.(-(0.5W * st / W∞ .+ θ') ./ ηt .- maxvals))
-        sum!(residual_storage', exp.(-(0.5W * st ./ W∞ .+ θ') ./ ηt .- maxvals .- log.(sumvals) .+ log.(r)))
+        maximum!(maxvals, -(0.5W / W∞ .+ θ') ./ ηt)
+        sum!(sumvals, exp.(-(0.5W / W∞ .+ θ') ./ ηt .- maxvals))
+        sum!(residual_storage', exp.(-(0.5W ./ W∞ .+ θ') ./ ηt .- maxvals .- log.(sumvals) .+ log.(r)))
         # return 
     end
+    γ = zeros(R, n)
     for i in 1:args.itermax
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
@@ -502,26 +502,27 @@ function LAMP(r::AbstractArray{R},
         end
 
 
-        infeas(ν, ηt)
-        θ̄ .=  tanh.((residual_storage - c) ./ eta_mu + 1/2 .*(1 .- args.tau_mu .* args.eta_mu).*log.((θ .+ 1) ./ (1 .- θ)))
-        ν̄ .= ν + τp * ηt * (θ - ν)
+        
         if (i - 1) % frequency == 0
-            p = softmax(-(0.5W * st / W∞ .+ ν') ./ ηt, norm_dims=2)
+            p = softmax(-(0.5W / W∞ .+ ν') ./ ηt, norm_dims=2)
             pr = r .* p
             feas = norm(sum(pr, dims=1)' - c, 1)
             obj = dot(round(pr, r, c), W)
             pobj = primalv(p, W, W∞, ηp, r, c)
-            dobj = dualv(θ, W, W∞, ηp, r, c)
+            dobj = dualv(γ, W, W∞, ηp, r, c)
             @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,lamp\n" elapsed_time i feas obj pobj dobj
             if (pobj - dobj) < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
         end
+
+        infeas(ν, ηt)
+        θ̄ .=  tanh.((residual_storage - c) ./ eta_mu + 1/2 .*(1 .- args.tau_mu .* args.eta_mu).*log.((θ .+ 1) ./ (1 .- θ)))
         ηt = 1 / (τp + (1/ηt)*(1-ηp))
-
-
+        ν̄ .= ν + τp * ηt * (θ - ν)
         infeas(ν̄, ηt)
         θ .=  tanh.((residual_storage - c) ./ eta_mu + 1/2 .*(1 .- args.tau_mu * args.eta_mu).*log.((θ .+ 1) ./ (1 .- θ)))
+         γ .= θ + τp * ηt * (θ - γ) 
         clamp!(θ, tanh(-args.B/2), tanh(args.B/2))
         ν .= ν + τp * ηt * (θ̄ - ν)
     end
