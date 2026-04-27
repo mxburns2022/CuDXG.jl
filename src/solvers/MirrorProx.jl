@@ -6,34 +6,29 @@ using Test
 
 function dualv(theta, W, W∞, ηp, r, c)
     if ηp == 0
-        return sum(-dot(c, 2W∞ .* (theta))) + sum(r'*minimum((W .+ 2W∞ .*theta'), dims=2))
+        return sum(-dot(c, 2W∞ .* (theta))) + sum(r' * minimum((W .+ 2W∞ .* theta'), dims=2))
     end
-    lse = logsumexp(-(0.5*W .+ (W∞ .* theta)') ./ ηp, 2)
-    return 2 * ((-W∞ * sum(c' * theta) - ηp * sum(r' *lse)) + ηp * dot(r, log.(r)))
+    lse = logsumexp(-(0.5 * W .+ (W∞ .* theta)') ./ ηp, 2)
+    return 2 * ((-W∞ * sum(c' * theta) - ηp * sum(r' * lse)) + ηp * dot(r, log.(r)))
 end
 function primalv(θ::TA, W::TM, W∞::TWinf, ηt::R, ηp::R, r::TA, c::TA) where {TA,TM,R,TWinf}
     pμ = softmax(-(0.5W .+ (W∞ .* θ)') ./ ηt, norm_dims=2)
-    lse = logsumexp(-(0.5*W .+ (W∞ .* θ)') ./ ηt, 2)
-    primal_other = (0.5 * (1-ηp/ηt)dot(W, r .* pμ) + sum(W∞ .* abs.(sum(r .* pμ, dims=1)' - c)) + (-W∞ * ηp/ηt * sum(c' * θ) - ηp * sum(r' *lse)) + ηp * dot(r, log.(r)))
+    lse = logsumexp(-(0.5 * W .+ (W∞ .* θ)') ./ ηt, 2)
+    primal_other = (0.5 * (1 - ηp / ηt)dot(W, r .* pμ) + sum(W∞ .* abs.(sum(r .* pμ, dims=1)' - c)) + (-W∞ * ηp / ηt * sum(c' * θ) - ηp * sum(r' * lse)) + ηp * dot(r, log.(r)))
     primal_val = (0.5 * dot(W, r .* pμ)
-            + sum(W∞ .* abs.(sum(r .* pμ, dims=1)' - c))
-            + ηp * dot(r, neg_entropy(pμ, dims=2)) + ηp * dot(r, log.(r)))
+                  + sum(W∞ .* abs.(sum(r .* pμ, dims=1)' - c))
+                  + ηp * dot(r, neg_entropy(pμ, dims=2)) + ηp * dot(r, log.(r)))
     # println(primal_val, " ", primal_other)
     # sleep(1)
     return 2(0.5 * dot(W, r .* pμ)
-            + sum(W∞ .* abs.(sum(r .* pμ, dims=1)' - c))
-            + ηp * dot(r, neg_entropy(pμ, dims=2)) + ηp * dot(r, log.(r)))
+             + sum(W∞ .* abs.(sum(r .* pμ, dims=1)' - c))
+             + ηp * dot(r, neg_entropy(pμ, dims=2)) + ηp * dot(r, log.(r)))
 end
 
-function kl_dual(θ1, θ2, c)
-    return c' * (
-        (θ1 .+ 1)  / 2 .* log.((θ1 .+ 1) ./(θ2 .+ 1) ) + (1 .- θ1)  / 2 .* log.((1 .- θ1) ./(1 .- θ2) )
-    )
-end
 function primalv(p::TM, W::TM, W∞::TWinf, ηp::R, r::TA, c::TA) where {TA,TM,R,TWinf}
     return 2(0.5 * dot(W, r .* p) +
-            sum(W∞ .* abs.(sum(r .* p, dims=1)' - c)) +
-             ηp * dot(r, neg_entropy(p, dims=2))+ ηp * dot(r, log.(r)))
+             sum(W∞ .* abs.(sum(r .* p, dims=1)' - c)) +
+             ηp * dot(r, neg_entropy(p, dims=2)) + ηp * dot(r, log.(r)))
 end
 function PDMP(r::AbstractArray{R},
     c::AbstractArray{R},
@@ -41,8 +36,9 @@ function PDMP(r::AbstractArray{R},
     args::EOTArgs{R},
     frequency::Int=50;
     adjust::Bool=true,
+    log_output=false,
     p0=Nothing
-) where {R, TW}
+) where {R,TW}
     # input 
     # W∞ = maximum(W', dims=2)
     W∞ = maximum(W)
@@ -61,7 +57,7 @@ function PDMP(r::AbstractArray{R},
     μ⁺t = copy(μ⁺)
     # eta_mu = args.C2 * sqrt(args.B) ./ (c .+ args.C3)
     eta_mu = 1. ./ (c .+ args.alpha / n) ./ args.tau_mu
-    ηπ = 1 ./  r ./ args.tau_p
+    ηπ = 1 ./ r ./ args.tau_p
     if p0 == Nothing
         if isa(W, CuArray)
             p = CUDA.ones(R, (n, n)) ./ (n)
@@ -80,6 +76,12 @@ function PDMP(r::AbstractArray{R},
     time_start = time_ns()
     ν = copy(μ⁺)
     ν⁻ = copy(μ⁺)
+    calpha = (c .+ args.alpha / n)
+
+    sumv = 0.
+    val1 = 0
+    val2 = 0
+    loglist = []
     for i in 1:args.itermax
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
@@ -89,28 +91,34 @@ function PDMP(r::AbstractArray{R},
         # eta_mu = 1 ./ sum(r .* p, dims=1)'
         arg = (sum(r .* p, dims=1)' - c) .* eta_mu
         maxval = max.(arg, -arg)
-        μ⁻t = μ⁻ .^ (1 - args.tau_mu*args.eta_mu) .* exp.(-arg - maxval)
-        μ⁺t = μ⁺ .^ (1 - args.tau_mu*args.eta_mu) .* exp.(arg - maxval)
+        μ⁻t = μ⁻ .^ (1 - args.tau_mu * args.eta_mu) .* exp.(-arg - maxval)
+        μ⁺t = μ⁺ .^ (1 - args.tau_mu * args.eta_mu) .* exp.(arg - maxval)
         normv = (μ⁻t + μ⁺t)
         μ⁻t = μ⁻t ./ normv
         μ⁺t = μ⁺t ./ normv
-        
+
         # sleep(0.1)
-        pt = p .^ (1 - args.tau_p*ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺ .- μ⁻)'))
+        pt = p .^ (1 - args.tau_p * ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺ .- μ⁻)'))
         pt ./= sum(pt, dims=2)
+        if log_output
+            val1 = DHa(μ⁺t - μ⁻t, μ⁺ - μ⁻, calpha) + KL(pt, p, r) * 0.5 / W∞
+        end
+
         # eta_mu = 1 ./ sum(r .* pt, dims=1)'
         # println(norm(pt - ptest))
         arg = (sum(r .* pt, dims=1)' - c) .* eta_mu
         maxval = max.(arg, -arg)
-        μ⁻ = μ⁻ .^ (1 - args.tau_mu*args.eta_mu) .* exp.(-arg - maxval)
-        μ⁺ = μ⁺ .^ (1 - args.tau_mu*args.eta_mu) .* exp.(arg - maxval)
+        μ⁻ = μ⁻ .^ (1 - args.tau_mu * args.eta_mu) .* exp.(-arg - maxval)
+        μ⁺ = μ⁺ .^ (1 - args.tau_mu * args.eta_mu) .* exp.(arg - maxval)
         # println(size(μ⁺))
         normv = (μ⁻ + μ⁺)
         μ⁻ ./= normv
         μ⁺ ./= normv
-        p = p .^ (1-args.tau_p * ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺t .- μ⁻t)'))
+        p = p .^ (1 - args.tau_p * ηp) .* exp.(-(ηπ .* r) .* (W * 0.5 / W∞ .+ (μ⁺t .- μ⁻t)'))
         p ./= sum(p, dims=2)
-
+        if log_output
+            val2 = DHa(μ⁺t - μ⁻t, μ⁺ - μ⁻, calpha) + KL(pt, p, r) * 0.5 / W∞
+        end
         if args.verbose && (i - 1) % frequency == 0
             # display(p)
             pr = r .* p
@@ -123,6 +131,9 @@ function PDMP(r::AbstractArray{R},
             if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
+        end
+        if log_output
+            push!(loglist, (cross_term_1=val1, cross_term_2=val2))
         end
         # println(norm(ptest-p), " ", ηp)
         # sleep(1)
@@ -138,6 +149,9 @@ function PDMP(r::AbstractArray{R},
             copy!(μ⁻a, μ⁻)
         end
     end
+    if log_output
+        return round(r .* p, r, c), μ⁺ .- μ⁻, loglist
+    end
     return round(r .* p, r, c), μ⁺, μ⁻
 end
 
@@ -148,18 +162,18 @@ function update_θ_residual(theta::CuDeviceArray{R}, theta_0::CuDeviceArray{R}, 
         return
     end
     @inbounds begin
-        difference = 2W∞*(residual[tid] - c[tid]) / eta_mu_i[tid]
+        difference = 2W∞ * (residual[tid] - c[tid]) / eta_mu_i[tid]
         thetav = theta_0[tid]
     end
     maxval = max(difference, -difference)
-    expv = exp(difference-maxval) * ((thetav + 1) / (1-thetav)).^(1 - eta_mu)
-    theta_value_new = (expv - exp(-maxval))/ (expv + exp(-maxval))
+    expv = exp(difference - maxval) * ((thetav + 1) / (1 - thetav)) .^ (1 - eta_mu)
+    theta_value_new = (expv - exp(-maxval)) / (expv + exp(-maxval))
     if adjust
         theta_value_new = clamp(theta_value_new, minv, maxv)#max(min(theta_value_new, maxv), minv)
     end
     @inbounds begin
         theta[tid] = theta_value_new
-    end 
+    end
 
     return
 end
@@ -384,6 +398,7 @@ function LAMP(r::CuArray{R},
     W::CuArray{R},
     args::EOTArgs{R},
     frequency::Int=50;
+    log_output::Bool=false,
     _θ=Nothing,
     s0=0.0
 ) where {R}
@@ -405,7 +420,6 @@ function LAMP(r::CuArray{R},
     ν̄ = copy(θ)
     θ̄ = copy(θ)
     eta_mu = (c .+ args.alpha / n) ./ (args.tau_mu)
-
     threads = 256
     println("time(s),iter,infeas,ot_objective,primal,dual,pdgap,solver")
     time_start = time_ns()
@@ -420,8 +434,15 @@ function LAMP(r::CuArray{R},
     # ηp = 0.1
     ηt = Inf
     τp = args.tau_p
-    minv = tanh(-args.B/2)
-    maxv = tanh(args.B/2)
+    minv = tanh(-args.B / 2)
+    maxv = tanh(args.B / 2)
+    infeas(ν, ηt, 1.0)
+    calpha = (c .+ args.alpha / n)
+
+    loglist = []
+    sumv = 0.0
+    val1 = 0
+    val2 = 0
     for i in 1:args.itermax
         elapsed_time = (time_ns() - time_start) / 1e9
         if elapsed_time > args.tmax
@@ -434,30 +455,47 @@ function LAMP(r::CuArray{R},
             primal_value = primalv(p, W, W∞, ηp, r, c)
             dual_value = dualv(θ, W, W∞, ηp, r, c)
             # feas = norm(sum(pr, dims=1)' - c, 1)
-            feas = norm(c - sum((r.*p)', dims=2) , 1)
+            feas = norm(c - sum((r .* p)', dims=2), 1)
 
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,%.14e,lamp_cuda\n" elapsed_time i feas obj primal_value dual_value primal_value-dual_value
+            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,%.14e,lamp_cuda\n" elapsed_time i feas obj primal_value dual_value primal_value - dual_value
             if feas < args.epsilon / 2 && primal_value - dual_value < args.epsilon / 2
                 break
             end
         end
-        infeas(ν, ηt, 1.0)
-        @cuda threads = threads blocks = linear_blocks update_θ_residual(θ̄, θ, residual_storage, c, eta_mu, args.tau_mu*args.eta_mu, false, minv, maxv, 1.0)
+        @cuda threads = threads blocks = linear_blocks update_θ_residual(θ̄, θ, residual_storage, c, eta_mu, args.tau_mu * args.eta_mu, false, minv, maxv, 1.0)
+        eta_prev = ηt
+        ηt = 1 / (τp + (1 / ηt) * (1 - ηp))
 
-        ηt = 1 / (τp + (1/ηt)*(1-ηp))
+        ν̄ .= τp * ηt .* θ + (1 - τp * ηt) .* ν
+        if log_output
+            val1 = DHa(θ̄, θ, calpha) + KL(ν̄, ν, ηt, eta_prev, r, W, W∞) / (2W∞)
+        end
 
-        ν̄ .=τp* ηt .* θ + (1-τp*ηt) .* ν
         # if args.eta_p == 0
         #     ηp = 1 / (i)
         # end
-
-        
         infeas(ν̄, ηt, 1.0)
-        @cuda threads = threads blocks = linear_blocks update_θ_residual(θ, θ, residual_storage, c, eta_mu, args.eta_mu, true, minv, maxv, 1.0)
-        ν = (1-τp*ηt) * ν  + τp*ηt * θ̄
+        diffterm = dot(ν ./ ηt - ν̄ ./ ηt, c - residual_storage)
+        @cuda threads = threads blocks = linear_blocks update_θ_residual(θ, θ, residual_storage, c, eta_mu, args.eta_mu, false, minv, maxv, 1.0)
+        ν = (1 - τp * ηt) * ν + τp * ηt * θ̄
+        if log_output
+            val2 = DHa(θ̄, θ, calpha) + KL(ν̄, ν, ηt, ηt, r, W, W∞) / (2W∞)
+        end
+
+        θ .= clamp.(θ, minv, maxv)
+
+        diffterm = dot(ν - ν̄, c - residual_storage)
+        infeas(ν, ηt, 1.0)
+        if log_output
+            push!(loglist, (iteration=i, cross_term_1=val1, cross_term_2=val2))
+        end
     end
     p = softmax(-(W * 0.5 ./ W∞ .+ ν') ./ ηt, norm_dims=2)
+    if log_output
+        return r .* p, θ, loglist
+    end
     return r .* p, θ
+
 end
 
 
@@ -502,7 +540,7 @@ function LAMP(r::AbstractArray{R},
         end
 
 
-        
+
         if (i - 1) % frequency == 0
             p = softmax(-(0.5W / W∞ .+ ν') ./ ηt, norm_dims=2)
             pr = r .* p
@@ -517,16 +555,16 @@ function LAMP(r::AbstractArray{R},
         end
 
         infeas(ν, ηt)
-        θ̄ .=  tanh.((residual_storage - c) ./ eta_mu + 1/2 .*(1 .- args.tau_mu .* args.eta_mu).*log.((θ .+ 1) ./ (1 .- θ)))
-        ηt = 1 / (τp + (1/ηt)*(1-ηp))
+        θ̄ .= tanh.((residual_storage - c) ./ eta_mu + 1 / 2 .* (1 .- args.tau_mu .* args.eta_mu) .* log.((θ .+ 1) ./ (1 .- θ)))
+        ηt = 1 / (τp + (1 / ηt) * (1 - ηp))
         ν̄ .= ν + τp * ηt * (θ - ν)
         infeas(ν̄, ηt)
-        θ .=  tanh.((residual_storage - c) ./ eta_mu + 1/2 .*(1 .- args.tau_mu * args.eta_mu).*log.((θ .+ 1) ./ (1 .- θ)))
-         γ .= θ + τp * ηt * (θ - γ) 
-        clamp!(θ, tanh(-args.B/2), tanh(args.B/2))
+        θ .= tanh.((residual_storage - c) ./ eta_mu + 1 / 2 .* (1 .- args.tau_mu * args.eta_mu) .* log.((θ .+ 1) ./ (1 .- θ)))
+        γ .= θ + τp * ηt * (θ - γ)
+        clamp!(θ, tanh(-args.B / 2), tanh(args.B / 2))
         ν .= ν + τp * ηt * (θ̄ - ν)
     end
-    p = softmax(-(0.5W*st / W∞ .+ ν') ./ηt, norm_dims=2)
+    p = softmax(-(0.5W * st / W∞ .+ ν') ./ ηt, norm_dims=2)
     return r .* p, θ
 end
 

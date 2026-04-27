@@ -69,7 +69,7 @@ function warp_min_reduce_cellsim!(
         for tile in 0:Ntiles-1
             j = tile * step + 1
             @inbounds begin
-                muval = θ[j + local_id]
+                muval = θ[j+local_id]
                 costval = feature_cost_cuda(metric, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, tid_x, j + local_id, ncols)
             end
             m_local = min(m_local, muladd(muval, c1, costval))
@@ -77,7 +77,7 @@ function warp_min_reduce_cellsim!(
         if Ntiles * step + local_id < N
             j = Ntiles * step + 1
             @inbounds begin
-                muval = θ[j + local_id]
+                muval = θ[j+local_id]
                 costval = feature_cost_cuda(metric, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, tid_x, j + local_id, ncols)
             end
             m_local = min(m_local, muladd(muval, c1, costval))
@@ -99,7 +99,7 @@ function extragradient_cellsim(
     marginal2::CuArray{T},
     args::EOTArgs,
     frequency::Int=100,
-    p::Float64=2.0,
+    log_output::Bool=false
 ) where T<:Real
     N = M = size(data, 1)
     θ = CUDA.zeros(T, M)
@@ -149,7 +149,7 @@ function extragradient_cellsim(
             residual_value = sum(abs.(residual_cache - marginal2))
             objective = sum(cost_cache)
             if η > 0
-                primal_value =  objective * (1 - η / ηt) - η * dot(marginal1, sumvals) - 2W∞ * η / ηt * dot(marginal2, ν) + hr + 2W∞ * residual_value
+                primal_value = objective * (1 - η / ηt) - η * dot(marginal1, sumvals) - 2W∞ * η / ηt * dot(marginal2, ν) + hr + 2W∞ * residual_value
                 @cuda threads = threads blocks = warp_blocks warp_logsumexp_spp_sim_fused!(sumvals, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, metric, θ, η, one(T), W∞)
                 dual_value = -η * dot(marginal1, sumvals) - 2W∞ * dot(marginal2, θ) + hr
             else
@@ -170,7 +170,7 @@ function extragradient_cellsim(
         @cuda threads = threads blocks = linear_blocks update_θ_residual(θ̄, θ, residual_cache, marginal2, eta_mu, T(args.eta_mu), false, minv, maxv, one(T))
         ηt = one(T) / (τp + (one(T) / ηt) * (one(T) - η))
         ν̄ .= (one(T) - ηt) * ν + ηt * θ
-        
+
         CUDA.synchronize()
         st = (one(T) - ηt) * st + ηt
         infeas(ν̄, ηt, st)
@@ -225,9 +225,9 @@ function residual_cellsim_c!(
             j = tile * step + 1
             @inbounds begin
                 costval = feature_cost_cuda(metric, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, j + local_id, tid_x, ncols)
-                marginalv = marginal1[j + local_id]
+                marginalv = marginal1[j+local_id]
             end
-            value = muladd(muladd(costval, c1, diff), -invreg, -logZi[j + local_id])
+            value = muladd(muladd(costval, c1, diff), -invreg, -logZi[j+local_id])
             weight = exp(value) * marginalv
             local_acc += weight
             cost_acc += weight * costval
@@ -236,9 +236,9 @@ function residual_cellsim_c!(
             j = Ntiles * step + 1
             @inbounds begin
                 costval = feature_cost_cuda(metric, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, j + local_id, tid_x, ncols)
-                marginalv = marginal1[j + local_id]
+                marginalv = marginal1[j+local_id]
             end
-            value = muladd(muladd(costval, c1, diff), -invreg, -logZi[j + local_id])
+            value = muladd(muladd(costval, c1, diff), -invreg, -logZi[j+local_id])
             weight = exp(value) * marginalv
             local_acc += weight
             cost_acc += weight * costval
@@ -292,7 +292,7 @@ function warp_logsumexp_spp_sim_fused!(
         for tile in 0:Ntiles-1
             j = tile * step + 1
             @inbounds begin
-                muval = θ[j + local_id]
+                muval = θ[j+local_id]
                 costval = feature_cost_cuda(metric, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, tid_x, j + local_id, ncols)
             end
             v = -(muladd(costval, c1, muval)) * invreg
@@ -306,7 +306,7 @@ function warp_logsumexp_spp_sim_fused!(
         if Ntiles * step + local_id < M
             j = Ntiles * step + 1
             @inbounds begin
-                muval = θ[j + local_id]
+                muval = θ[j+local_id]
                 costval = feature_cost_cuda(metric, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, tid_x, j + local_id, ncols)
             end
             v = -(muladd(costval, c1, muval)) * invreg

@@ -55,6 +55,21 @@ function dual_gradient!(output::TA, x::TA, prob::EOTProblem) where TA
     output .= vcat(grad_cache1, grad_cache2)
     output .-= prob.b
 end
+
+function KL(theta1, theta2, eta1, eta2, r, W, W∞)
+    p1 = softmax(-(W * 0.5 / W∞ .+ theta1') ./ eta1, norm_dims=2)
+    p2 = softmax(-(W * 0.5 / W∞ .+ theta2') ./ eta2, norm_dims=2)
+    return dot(r .* p1, log.(p1 .+ 1e-30) - log.(p2 .+ 1e-30))
+end
+function KL(p1, p2, r)
+    return dot(r .* p1, log.(p1 .+ 1e-30) - log.(p2 .+ 1e-30))
+end
+function DHa(theta1, theta2, calpha)
+    return calpha' * (
+        (theta1 .+ 1) / 2 .* log.((theta1 .+ 1 .+ 1e-30) ./ (theta2 .+ 1 .+ 1e-30)) +
+        (1 .- theta1) / 2 .* log.((1 .- theta1 .+ 1e-30) ./ (1 .- theta2 .+ 1e-30))
+    )
+end
 # function f(p, prob::EOTProblem)
 #     return dot(p, prob.W)
 # end

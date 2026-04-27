@@ -154,7 +154,7 @@ function push_largest!(heap::Vector{T}, current_sum::T, value::T, keep::Int) whe
 end
 
 function within_cluster_pairs(clusters::AbstractVector)
-    counts = Dict{eltype(clusters), Int}()
+    counts = Dict{eltype(clusters),Int}()
     for cluster in clusters
         counts[cluster] = get(counts, cluster, 0) + 1
     end
@@ -174,6 +174,7 @@ function streaming_c_index(
     nfeatures = size(cell_data.data, 1)
     feature_ids = feature_support(kernel)
     column_sums = vec(sum(cell_data.data; dims=1))
+    println(column_sums)
     data_gpu = CuArray(kernel.data)
     row_sums_gpu = CuArray(kernel.row_sums)
     row_sqnorms_gpu = CuArray(kernel.row_sqnorms)
@@ -217,12 +218,12 @@ function streaming_c_index(
                 frequency,
                 solver_kwargs...,
             )
-            
+
             cell_data.clusters[i] == cell_data.clusters[j] && (sw += distance)
             smin = push_smallest!(smallest_heap, smin, distance, nw)
             smax = push_largest!(largest_heap, smax, distance, nw)
             processed += 1
-            
+
             println(stderr, "processed_pairs=$(processed)/$(npairs)")
             flush(stderr)
             if processed >= num_subproblems
@@ -244,12 +245,12 @@ function streaming_c_index(
     end
 
     return (
-        c_index = (sw - smin) / denominator,
-        Sw = sw,
-        Smin = smin,
-        Smax = smax,
-        Nw = nw,
-        pairs = npairs,
+        c_index=(sw - smin) / denominator,
+        Sw=sw,
+        Smin=smin,
+        Smax=smax,
+        Nw=nw,
+        pairs=npairs,
     )
 end
 

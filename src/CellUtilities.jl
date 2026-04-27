@@ -3,7 +3,7 @@ using Statistics
 using StatsBase
 
 const CELL_COST_METRICS = ("l1", "l2", "cosine", "pearson", "correlation")
-
+export get_cell_similarity_problem
 struct OTScOmicsCellData{T}
     data::Matrix{T}
     feature_names::Vector{String}
@@ -53,12 +53,12 @@ function read_otscomics_cell_data(fpath::String, num_features::Int, numcells::In
     rng = Xoshiro(seed)
     feature_names = String.(table[:, 1])
     cell_names = String.(names(table)[2:end])
-    random_cells = sample(rng, [1:size(cell_names,1)...], numcells, replace = false)
+    numcells = min(numcells, size(cell_names, 1))
+    random_cells = sample(rng, [1:size(cell_names, 1)...], numcells, replace=false)
     data = Float64.(Matrix(table[:, 2:end]))[:, random_cells]
     num_features = min(num_features, size(data, 1))
-    numcells = min(numcells, size(data, 2))
     selected_features = sortperm(Statistics.std(data, dims=2), dims=1, rev=true)[1:num_features]
-    data = data[selected_features,:]
+    data = data[selected_features, :]
     clusters = [String(i) for i in infer_cell_clusters(cell_names[random_cells])]
     return OTScOmicsCellData(data, feature_names[selected_features], cell_names[random_cells], clusters)
 end
@@ -302,10 +302,60 @@ end
 
 
 function get_flat_metrics(M::AbstractMatrix{R}) where {R<:Real}
-  N = size(M, 1)
-  row_sums = reshape(sum(M, dims=2), N)
-  row_sqnorms = reshape(sum(M.^2, dims=2), N)
-  row_means = reshape(mean(M, dims=2), N)
-  row_centered_sqnorms = reshape(sum((M .- row_means).^2, dims=2), N)
-  return row_sums, row_sqnorms, row_means, row_centered_sqnorms
+    N = size(M, 1)
+    row_sums = reshape(sum(M, dims=2), N)
+    row_sqnorms = reshape(sum(M .^ 2, dims=2), N)
+    row_means = reshape(mean(M, dims=2), N)
+    row_centered_sqnorms = reshape(sum((M .- row_means) .^ 2, dims=2), N)
+    return row_sums, row_sqnorms, row_means, row_centered_sqnorms
+end
+
+
+function make_cost_matrix_cuda(output::CuDeviceMatrix{T},
+    metric::Symbol,
+    data::CuDeviceMatrix{T},
+    row_sums::CuDeviceVector{T},
+    row_sqnorms::CuDeviceVector{T},
+    row_means::CuDeviceVector{T},
+    row_centered_sqnorms::CuDeviceVector{T},
+    scale::T) where {T<:Real}
+    n = size(data, 1)
+    ncols = size(data, 2)
+    idx = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    idy = threadIdx().y + (blockIdx().y - 1) * blockDim().y
+    if idx > n || idy > n
+        return
+    end
+    output[idx, idy] = feature_cost_cuda(metric, data, row_sums, row_sqnorms, row_means, row_centered_sqnorms, scale, idx, idy, ncols)
+    return
+end
+
+
+function get_cell_similarity_problem(
+    fpath::String,
+    num_features::Int,
+    num_cells::Int,
+    cell_index_1,
+    cell_index_2,
+    metric::AbstractString="correlation",
+    normalize_features::Bool=true,
+    seed::Int=0,
+)
+    cell_data = read_otscomics_cell_data(fpath, num_features, num_cells, seed)
+    kernel = CellCostKernel(cell_data.data, metric; normalize_features=normalize_features)
+    column_sums = vec(sum(cell_data.data; dims=1))
+    println(num_features)
+    flush(stdout)
+    W = CUDA.zeros(Float64, num_features, num_features)
+    row_sums, row_sqnorms, row_means, row_centered_sqnorms = map(CuArray, get_flat_metrics(kernel.data))
+    threads = (16, 16)
+    blocks = (div(num_features, 16, RoundUp), div(num_features, 16, RoundUp))
+    cudata = CuArray(kernel.data)
+    @cuda threads = threads blocks = blocks make_cost_matrix_cuda(W, Symbol(metric), cudata, row_sums, row_sqnorms, row_means, row_centered_sqnorms, kernel.scale)
+    CUDA.synchronize()
+    marginal_1 = zeros(Float64, num_features)
+    marginal_2 = zeros(Float64, num_features)
+    fill_normalized_cell!(marginal_1, cell_data.data, cell_index_1, column_sums)
+    fill_normalized_cell!(marginal_2, cell_data.data, cell_index_2, column_sums)
+    return CuArray(marginal_1), CuArray(marginal_2), W, cell_data, kernel
 end
