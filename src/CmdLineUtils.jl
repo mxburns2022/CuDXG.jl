@@ -73,6 +73,14 @@ end
     "--output2"
     help = "Output path for assignment 2"
     default = ""
+    "--height"
+    help = "Image height"
+    default = typemax(Int)
+    arg_type = Int
+    "--width"
+    help = "Image width"
+    default = typemax(Int)
+    arg_type = Int
     "--potential-out"
     help = "Output path for dual potentials. Order is (1) Simplex dual (if using extragradient), (2) Potential for Row Marginal, (3) Potential for Column Marginal>"
     default = ""
@@ -160,8 +168,9 @@ end
 end
 function run_dot(parsed_args)
     args = read_args_json(parsed_args["settings"])
-    marginal1, h, w, N = read_dotmark_data(parsed_args["file1"])
-    marginal2, h2, w2, N2 = read_dotmark_data(parsed_args["file2"])
+    size = (parsed_args["height"], parsed_args["width"])
+    marginal1, h, w, N = read_dotmark_data(parsed_args["file1"], size)
+    marginal2, h2, w2, N2 = read_dotmark_data(parsed_args["file2"], size)
     @assert h == h2 && w == w2 && N == N2
     # mix it with a little bit of the uniform distribution for stability
     r = normalize(marginal1 .+ 1e-6, 1)

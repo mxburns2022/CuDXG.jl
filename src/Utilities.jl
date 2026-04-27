@@ -5,6 +5,7 @@ using IterTools
 using StructTypes
 using ArgParse
 # using DelimitedFiles
+using Images
 
 @kwdef struct EOTProblem{TA,TM,R}
     η::R
@@ -160,9 +161,12 @@ function round(γ::AbstractMatrix{T}, μ::AbstractArray{T}, ν::AbstractArray{T}
     γ̂ = γ⁺⁺ + rμ * rν' / norm(rμ, 1)
     return γ̂
 end
-function read_dotmark_data(fpath::String)
+function read_dotmark_data(fpath::String, sizes::Tuple{Int,Int})
     input_data = Matrix(CSV.read(fpath, header=false, DataFrame))
-    h, w = size(input_data)
+    # println(size(input_data), sizes)
+    h = min(sizes[1], size(input_data, 1))
+    w = min(sizes[2], size(input_data, 2))
+    input_data = imresize(input_data, (h, w))
     N = h * w
     marginal = reshape(input_data, N) / sum(input_data)
     return marginal, h, w, N
