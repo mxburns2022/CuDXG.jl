@@ -15,12 +15,16 @@ Run DOT solvers on selected problems from the DOTmark_1.0 dataset
 """
 benchmark_classes = ["ClassicImages", "GRFsmooth", "MicroscopyImages"]
 sizes = [64]
-instance_pairs = [(2, 6), (3, 5), (5, 7), (1, 2), (2, 10)]
+if ARGS[1] == "1"
+    instance_pairs = [(5, 7), (1, 2), (2, 10)]
+else
+    instance_pairs = [(2, 6), (3, 5), ]
+end
 algorithms = [keys(solvers)...]
-# pvals = ["1", "2", "Inf"]
-pvals = ["Inf"]
-# algorithms = [("sinkhorn", 1e-4), ("sinkhorn", 1e-5), ("dual_extragradient", 0)]
-algorithms = [("sinkhorn", 1e-2)]
+pvals = ["1", "2", "Inf"]
+# pvals = ["Inf"]
+algorithms = [("sinkhorn", 1e-4), ("annealed_sinkhorn", 1e-2), ("sinkhorn", 1e-5), ("lamp", 0.0), ]
+# algorithms = [("sinkhorn", 1e-2)]
 # algorithms = [ "sinkhorn", ]
 # configuration = "default_1e-05.json"
 for (p, (solver,eps), (ind1, ind2),  probclass, size) in product(pvals, algorithms, instance_pairs, benchmark_classes, sizes)
@@ -30,19 +34,22 @@ for (p, (solver,eps), (ind1, ind2),  probclass, size) in product(pvals, algorith
     file2 = joinpath(benchmark_directory, probclass, "data$(size)_10$(lpad(ind2, 2, '0')).csv")
     epsstring = sprintf1("%1.0e", eps)
     # Format ouutput file as <problem_class>_<resolution>_<index of img1>_<index of img2>_<η value>_<solver_name>_log.csv
+    
     output_file = "timing_" * join([lowercase(probclass), size, ind1, ind2, epsstring, solver, p], "_") * "_log.csv"
-    # if ispath(joinpath(output_directory, output_file))
-    #     continue
-    # end
-    input_file = if solver == "sinkhorn" "../configurations/default_$(epsstring).json" else "../configurations/default_0.json" end
+    if isfile(joinpath(output_directory, output_file))
+        fpath_out = joinpath(output_directory, output_file)
+        println("$fpath_out exists, continuing...")
+        continue
+    end
+    input_file = if contains(solver, "sinkhorn") "configurations/default_$(epsstring).json" else "configurations/default_0.json" end
     arglist = [
         "run",
         "--algorithm", solver,
         "--p", p,
         "--settings", input_file,
         "--kernel",
-        "--frequency", if solver == "greenkhorn"
-            "$(25 * size * size)"
+        "--frequency", if solver == "annealed_sinkhorn"
+            "10"
         else
             "200"
         end,
