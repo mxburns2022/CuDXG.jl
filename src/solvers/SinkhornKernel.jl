@@ -521,13 +521,15 @@ function sinkhorn_color_transfer(
             @cuda threads = threads blocks = blocks warp_logsumexp_ct_fused!(ψ, img2, img1, marginal2, φ, η, W∞, p)
         end
         CUDA.synchronize()
-        if args.verbose && (i - 1) % frequency == 0
+        if (i - 1) % frequency == 0
             @cuda threads = threads blocks = blocks residual_opt!(residual_cache, cost_cache, img1, img2, marginal1, φ, ψ, η, W∞, p)
             CUDA.synchronize()
             residual_r = norm(residual_cache, 1)
-            ot_objective = W∞*sum(cost_cache)
-            objective =W∞* (dot(ψ, marginal2) + dot(φ, marginal1))
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,sinkhorn_kernel\n" elapsed_time i residual_r ot_objective objective
+            if args.verbose
+                ot_objective = W∞*sum(cost_cache)
+                objective =W∞* (dot(ψ, marginal2) + dot(φ, marginal1))
+                @printf "%.6e,%d,%.14e,%.14e,%.14e,sinkhorn_kernel\n" elapsed_time i residual_r ot_objective objective
+            end
             if residual_r <= args.epsilon / 6
                 break
             end

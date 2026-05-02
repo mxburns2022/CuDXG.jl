@@ -17,6 +17,7 @@ function sinkhorn_log(r::AbstractArray{R},
     # WScaled = W
     n = size(r, 1)
     K = -W ./ args.eta_p
+
     if isa(W, CuArray)
         φ = isnothing(φ0) ? CUDA.zeros(R, n) : copy(φ0)
         ψ = isnothing(ψ0) ? CUDA.zeros(R, n) : copy(ψ0)
@@ -35,6 +36,7 @@ function sinkhorn_log(r::AbstractArray{R},
     end
     time_start = time_ns()
     num_iter = 0
+    println("REEEE")
     for i in 1:args.itermax
         # logsumexp!(cache1', maxcache', K .+ φ, 1)
         # logsumexp!(cache2, maxcache, K .+ (log.(c) - cache1)', 2)
@@ -50,8 +52,8 @@ function sinkhorn_log(r::AbstractArray{R},
         if elapsed_time > args.tmax
             break
         end
-
-        if args.verbose && (i - 1) % frequency == 0
+        # println()
+        if (i - 1) % frequency == 0
             p = exp.(K .+ φ .+ ψ')
             # pr = round(p, r, c)
             feas = norm(sum(p, dims=1)' .- c, 1) + norm(sum(p, dims=2) .- r, 1)
@@ -61,7 +63,9 @@ function sinkhorn_log(r::AbstractArray{R},
             # println()
             dobj = -args.eta_p * (sum(-logsumexp(K .+ φ .+ ψ')) - c'ψ - sum(r'φ))
             # pdgap = -pobj + dobj
-            @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,sinkhorn\n" elapsed_time i feas obj pobj dobj
+            if args.verbose
+                @printf "%.6g,%d,%.14e,%.14e,%.14e,%.14e,sinkhorn\n" elapsed_time i feas obj pobj dobj
+            end
             if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
