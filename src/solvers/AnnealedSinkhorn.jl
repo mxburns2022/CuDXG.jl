@@ -24,6 +24,7 @@ function annealed_sinkhorn_log(
     verbose = args.verbose
     args.verbose = false
     total_iters = 0
+    tmax = args.tmax
     if verbose
         println("time(s),iter,infeas,ot_objective,eta,solver")
     end
@@ -40,11 +41,12 @@ function annealed_sinkhorn_log(
             ψ0=ψws,
         )
         total_iters += num_iter
+        elapsed_time = (time_ns() - time_start) / 1e9
+        args.tmax = tmax - elapsed_time
         if verbose
-            elapsed_time = (time_ns() - time_start) / 1e9
             @printf "%.6e,%d,%.14e,%.14e,%.14e,annealed_sinkhorn\n" elapsed_time total_iters residual_val objective eta
         end
-        if eta == eta_final
+        if eta == eta_final || elapsed_time >= tmax
             break
         end
         φws .= φ + (eta / preveta) .* (φ - φprev)
@@ -89,6 +91,8 @@ function annealed_sinkhorn_euclidean(
     verbose = args.verbose
     args.verbose = false
     total_iters = 0
+    tmax = args.tmax
+    
     if verbose
         println("time(s),iter,infeas,ot_objective,eta,solver")
     end
@@ -108,11 +112,12 @@ function annealed_sinkhorn_euclidean(
             ψ0=ψws,
         )
         total_iters += num_iter
+        elapsed_time = (time_ns() - time_start) / 1e9
+        args.tmax = tmax - elapsed_time
         if verbose
-            elapsed_time = (time_ns() - time_start) / 1e9
             @printf "%.6e,%d,%.14e,%.14e,%.14e,annealed_sinkhorn_kernel\n" elapsed_time total_iters residual_val objective eta
         end
-        if eta == eta_final
+        if eta == eta_final || elapsed_time >= tmax
             break
         end
         φws .= φ + (eta / preveta) .* (φ - φprev)
