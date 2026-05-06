@@ -422,7 +422,9 @@ function LAMP(r::CuArray{R},
     θ̄ = copy(θ)
     eta_mu = (c .+ args.alpha / n) ./ (args.tau_mu)
     threads = 256
-    println("time(s),iter,infeas,ot_objective,primal,dual,pdgap,solver")
+    if args.verbose
+        println("time(s),iter,infeas,ot_objective,primal,dual,pdgap,solver")
+    end
     time_start = time_ns()
     linear_blocks = Int(ceil(n / threads))
     warp_blocks = Int(ceil(n / div(threads, 32, RoundUp)))
