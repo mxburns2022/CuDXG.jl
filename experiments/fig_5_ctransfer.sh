@@ -1,0 +1,1 @@
+julia --project CmdLine.jl ctransfer eot_images/gemini_cityscape_newer.png eot_images/gemini_flowers_newer.png --algorithm lamp --output1 data/transfer/city_lamp_p2_512.png --output2 data/transfer/flowers_lamp_p2_512.png --settings=configurations/long/default_0.json --height 512 --frequency=25 --width 512 --p 2

@@ -5,10 +5,9 @@
     "tau_mu": 1.0,
     "alpha": 0.01,
     "B": 1.1,
-    "epsilon": 1e-10,
-    "itermax": 1000000,
-    "anneal_mult": 0.9,
+    "epsilon": 1e-4,
+    "itermax": 100000,
     "verbose": true,
-    "tmax": 600,
+    "tmax": 3600,
     "inner_iter": 10
 }

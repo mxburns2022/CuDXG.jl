@@ -468,7 +468,7 @@ function LAMP(r::CuArray{R},
 
         ν̄ .= τp * ηt .* θ + (1 - τp * ηt) .* ν
         if log_output
-            val1 = DHa(θ̄, θ, calpha) + KL(ν̄, ν, ηt, eta_prev, r, W, W∞) / (2W∞)
+            val1 = DHa(θ̄, θ, calpha) + KL(ν̄, ν, ηt, eta_prev, r, W, W∞)
         end
 
         # if args.eta_p == 0
@@ -479,7 +479,7 @@ function LAMP(r::CuArray{R},
         @cuda threads = threads blocks = linear_blocks update_θ_residual(θ, θ, residual_storage, c, eta_mu, args.eta_mu, false, minv, maxv, 1.0)
         ν = (1 - τp * ηt) * ν + τp * ηt * θ̄
         if log_output
-            val2 = DHa(θ̄, θ, calpha) + KL(ν̄, ν, ηt, ηt, r, W, W∞) / (2W∞)
+            val2 = DHa(θ̄, θ, calpha) + KL(ν̄, ν, ηt, ηt, r, W, W∞)
         end
 
         θ .= clamp.(θ, minv, maxv)
