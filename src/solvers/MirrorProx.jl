@@ -119,15 +119,16 @@ function PDMP(r::AbstractArray{R},
         if log_output
             val2 = DHa(μ⁺t - μ⁻t, μ⁺ - μ⁻, calpha) + KL(pt, p, r) * 0.5 / W∞
         end
-        if args.verbose && (i - 1) % frequency == 0
+        if (i - 1) % frequency == 0
             # display(p)
             pr = r .* p
             feas = norm(sum(pr', dims=2) - c, 1)
             obj = dot(pr, W)
             pobj = primalv(p, W, W∞, ηp, r, c)
             dobj = dualv(μ⁺ - μ⁻, W, W∞, ηp, r, c)
-
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,pdmp\n" elapsed_time i feas obj pobj dobj
+            if args.verbose
+                @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,pdmp\n" elapsed_time i feas obj pobj dobj
+            end
             if pobj - dobj < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
@@ -456,8 +457,9 @@ function LAMP(r::CuArray{R},
             dual_value = dualv(θ, W, W∞, ηp, r, c)
             # feas = norm(sum(pr, dims=1)' - c, 1)
             feas = norm(c - sum((r .* p)', dims=2), 1)
-
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,%.14e,lamp_cuda\n" elapsed_time i feas obj primal_value dual_value primal_value - dual_value
+            if args.verbose
+                @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,%.14e,lamp_cuda\n" elapsed_time i feas obj primal_value dual_value primal_value - dual_value
+            end
             if feas < args.epsilon / 2 && primal_value - dual_value < args.epsilon / 2
                 break
             end
@@ -548,7 +550,9 @@ function LAMP(r::AbstractArray{R},
             obj = dot(round(pr, r, c), W)
             pobj = primalv(p, W, W∞, ηp, r, c)
             dobj = dualv(γ, W, W∞, ηp, r, c)
-            @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,lamp\n" elapsed_time i feas obj pobj dobj
+            if args.verbose
+                @printf "%.6e,%d,%.14e,%.14e,%.14e,%.14e,lamp\n" elapsed_time i feas obj pobj dobj
+            end
             if (pobj - dobj) < args.epsilon / 6 && feas < args.epsilon / 6
                 break
             end
@@ -564,7 +568,7 @@ function LAMP(r::AbstractArray{R},
         clamp!(θ, tanh(-args.B / 2), tanh(args.B / 2))
         ν .= ν + τp * ηt * (θ̄ - ν)
     end
-    p = softmax(-(0.5W * st / W∞ .+ ν') ./ ηt, norm_dims=2)
+    p = softmax(-(0.5W / W∞ .+ ν') ./ ηt, norm_dims=2)
     return r .* p, θ
 end
 

@@ -101,6 +101,6 @@ optional arguments:
 
 
 ## Experiments and Data
-The data used for plotting each figure in the main paper is provided in `data_archive`. Experiment code can be found in `experiments`, and the code to plot all figures can be found in `experiments/make_figures.ipynb`.
+The data used for plotting each figure in the main paper is provided in `data_archive`. Experiment code can be found in `experiments`, and the code to plot all figures can be found in `experiments/make_figures.ipynb`. Note that a compatible CUDA GPU is needed to run some experiemnts. A small example use case can be found in `example_problem.ipynb`.
 
 The `experiments` folder assumes an environment variable `BENCH` exists which points to the parent of the DOTmark directory, e.g., `$BENCH/DOTmark_v1.0` exists. 

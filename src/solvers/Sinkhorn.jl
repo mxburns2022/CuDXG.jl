@@ -36,7 +36,6 @@ function sinkhorn_log(r::AbstractArray{R},
     end
     time_start = time_ns()
     num_iter = 0
-    println("REEEE")
     for i in 1:args.itermax
         # logsumexp!(cache1', maxcache', K .+ φ, 1)
         # logsumexp!(cache2, maxcache, K .+ (log.(c) - cache1)', 2)
